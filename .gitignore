@@ -104,3 +104,20 @@ InitTestScene*.unity*
 
 # Auto-generated cache in Assets folder
 /[Aa]ssets/[Ss]ceneDependencyCache*
+
+# Third-party / purchased assets
+/Assets/CartoonVFX9X/
+/Assets/ElvGames/
+/Assets/Lana Studio/
+/Assets/Layer Lab/
+/Assets/MasterStylizedFX/
+/Assets/Universal Sound FX/
+/Assets/Zen Games Sound Effects and Music Pack/
+
+/Assets/CartoonVFX9X.meta
+/Assets/ElvGames.meta
+/Assets/Lana Studio.meta
+/Assets/Layer Lab.meta
+/Assets/MasterStylizedFX.meta
+/Assets/Universal Sound FX.meta
+/Assets/Zen Games Sound Effects and Music Pack.meta
