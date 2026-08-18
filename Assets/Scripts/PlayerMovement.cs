@@ -1,4 +1,3 @@
-using Mono.Cecil.Cil;
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
@@ -8,23 +7,29 @@ using UnityEngine.UIElements;
 
 public class PlayerMovement : MonoBehaviour
 {
-    public float moveSpeed = 2f;
+    public float walkSpeed = 6f;
 
     float moveX = 0f;
-    float moveY = 0f;
     float moveZ = 0f;
 
-    public Transform Head;
-    public Transform Body;
+    private Animator animator;
+
+    private Rigidbody rb;
+
+    private void Start()
+    {
+        animator = GetComponent<Animator>();
+        rb = GetComponent<Rigidbody>();
+    }
     public void MovePlayer(KeyCode code)
     {
         if(code == KeyCode.W)
         {
-            moveY = 1f;
+            moveZ = 1f;
         }
         if (code == KeyCode.S)
         {
-            moveY = -1f;
+            moveZ = -1f;
         }
         if (code == KeyCode.D)
         {
@@ -42,7 +47,7 @@ public class PlayerMovement : MonoBehaviour
     {
         if(data == "W")
         {
-            moveY = 0f;
+            moveZ = 0f;
         }
         if(data == "A")
         {
@@ -50,25 +55,51 @@ public class PlayerMovement : MonoBehaviour
         }
     }
 
-    private void Update()
-    {
-        if (Head != null)
-        {
-            Vector3 position = Camera.main.ScreenToWorldPoint(new Vector3(Input.mousePosition.x, Input.mousePosition.y, 0));
-            position -= new Vector3(transform.position.x, transform.position.y, position.z);
-            Head.rotation = Quaternion.LookRotation(Vector3.forward, position);
-        }
-    }
     public void SetMovePlayer()
     {
-        float xSpeed = moveX * moveSpeed * Time.deltaTime;
-        float ySpeed = moveY * moveSpeed * Time.deltaTime;
-        float zSpeed = moveZ * moveSpeed * Time.deltaTime;
+        Vector3 cameraForward = Camera.main.transform.forward;
+        Vector3 cameraRight = Camera.main.transform.right;
 
-        Vector3 moveDirection = new Vector3(xSpeed, ySpeed, zSpeed);
+        cameraForward.y = 0f;
+        cameraRight.y = 0f;
 
-        transform.Translate(moveDirection, Space.World);
+        cameraForward.Normalize();
+        cameraRight.Normalize();
 
-        Body.rotation = Quaternion.LookRotation(Vector3.forward,moveDirection);
+        Vector3 moveDirection =
+            cameraForward * moveZ +
+            cameraRight * moveX;
+
+        // 대각선 이동 시 더 빨라지는 것 방지
+        if (moveDirection.sqrMagnitude > 1f)
+            moveDirection.Normalize();
+
+        Vector3 nextPosition = rb.position + moveDirection * walkSpeed * Time.fixedDeltaTime;
+
+        rb.MovePosition(nextPosition);
+
+        UpdateAnimation(moveDirection);
+    }
+
+    private void UpdateAnimation(Vector3 moveDirection)
+    {
+        float movement = moveDirection.magnitude;
+
+        animator.SetFloat("Speed", movement);
+    }
+
+    public void PlayThrow()
+    {
+        animator.SetTrigger("Throw");
+    }
+
+    public void PlayHit()
+    {
+        animator.SetTrigger("Hit");
+    }
+
+    public void PlayDeath()
+    {
+        animator.SetTrigger("Death");
     }
 }

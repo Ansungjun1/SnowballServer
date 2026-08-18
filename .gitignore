@@ -113,6 +113,9 @@ InitTestScene*.unity*
 /Assets/MasterStylizedFX/
 /Assets/Universal Sound FX/
 /Assets/Zen Games Sound Effects and Music Pack/
+/Assets/CartoonCubeWorld/
+/Assets/BattleRoyaleHeroesPBR/
+
 
 /Assets/CartoonVFX9X.meta
 /Assets/ElvGames.meta
@@ -121,3 +124,5 @@ InitTestScene*.unity*
 /Assets/MasterStylizedFX.meta
 /Assets/Universal Sound FX.meta
 /Assets/Zen Games Sound Effects and Music Pack.meta
+/Assets/CartoonCubeWorld.meta
+/Assets/BattleRoyaleHeroesPBR.meta

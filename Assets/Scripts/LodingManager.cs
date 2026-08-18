@@ -18,6 +18,10 @@ public class LodingManager : MonoBehaviour
     public GameObject RankingImage;
     public GameObject SettingImage;
     public string Name { get; set; }
+    private void Start()
+    {
+        Application.runInBackground = true;
+    }
     public void OffLoadImage()
     {
         LoadImage.SetActive(false);
@@ -52,5 +56,8 @@ public class LodingManager : MonoBehaviour
     {
         WaitImage.SetActive(false);
         PlayMap.SetActive(true);
+
+        Cursor.lockState = CursorLockMode.Locked;
+        Cursor.visible = false;
     }
 }

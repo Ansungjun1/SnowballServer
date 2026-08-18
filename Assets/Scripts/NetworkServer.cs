@@ -11,14 +11,6 @@ using System.Collections.Concurrent;
 using System.IO;
 using System.Net.Http;
 
-enum TcpPacketType : byte
-{
-    Chat = 0x01,
-    PlayerJoin = 0x02,
-    AssignClientId = 0x03,
-    PlayerLeave = 0x04
-}
-
 public class NetworkServer : MonoBehaviour
 {
     private TcpListener tcpServer;
@@ -417,9 +409,9 @@ public class NetworkServer : MonoBehaviour
         string data = Encoding.UTF8.GetString(buffer, 2, messageLength);
         //Debug.Log("위치 데이터 수신: " + data);
 
-        string[] parts = data.Split(':', 2);
+        string[] parts = data.Split(':', 3);
 
-        if (parts.Length != 2)
+        if (parts.Length != 3)
             return;
 
         string token = parts[0];

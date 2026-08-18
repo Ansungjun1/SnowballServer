@@ -8,6 +8,24 @@ using System.Threading;
 using System;
 using System.Net;
 using System.Threading.Tasks;
+using UnityEngine.TextCore.Text;
+
+enum TcpPacketType : byte
+{
+    Chat = 0x01,
+    PlayerJoin = 0x02,
+    AssignClientId = 0x03,
+    PlayerLeave = 0x04,
+
+    SnowItemRequest = 0x05,
+    SnowItemResult = 0x06,
+    SnowItemRespawn = 0x07
+}
+
+enum UdpPacketType : byte
+{
+    Position = 0x02
+}
 
 public class NetworkClient : MonoBehaviour
 {
@@ -17,13 +35,15 @@ public class NetworkClient : MonoBehaviour
     public TextMeshProUGUI text;
     public GameObject character;
     private Dictionary<int, GameObject> otherPlayers = new Dictionary<int, GameObject>();
+    private Dictionary<int, int> lastReceivedPositionSequence = new Dictionary<int, int>();
     public GameObject[] Prefab;
-    public GameObject myPrefab;
-    public int ChoosePrefab;
+    private int ChoosePrefab;
     public TextMeshProUGUI chat_text;
     public TextMeshProUGUI my_Chat_text;
     public TMP_InputField input_Chat_text;
     public Transform[] SpawnPos;
+
+    private Dictionary<int, SnowItem> snowItems = new Dictionary<int, SnowItem>();
 
     private bool isRunning;
 
@@ -38,6 +58,16 @@ public class NetworkClient : MonoBehaviour
     private int udpPort = 9051;
     private int tcpPort = 9050;
 
+    bool isChatting;
+
+    private int positionSequence = 0;
+
+    private int mySnowballCount = 0;
+
+    private Dictionary<int, Vector3> targetPositions = new Dictionary<int, Vector3>();
+    private float positionSendInterval = 0.05f; // 20Hz
+    private float positionSendTimer = 0f;
+
     private void Start()
     {
         System.Random rand = new System.Random();
@@ -49,6 +79,8 @@ public class NetworkClient : MonoBehaviour
 
         ConnectToServer(ServerIP, tcpPort);
         ConnectToUdpServer(ServerIP, udpPort);
+
+        RegisterSnowItems();
     }
 
     void ConnectToServer(string serverIP, int port)
@@ -68,60 +100,111 @@ public class NetworkClient : MonoBehaviour
         Debug.Log("UDP서버 연결");
         _ = ListenForUdpMessage();
     }
+    void RegisterSnowItems()
+    {
+        SnowItem[] items = FindObjectsOfType<SnowItem>();
 
+        foreach (SnowItem item in items)
+        {
+            snowItems[item.itemId] = item;
+        }
+    }
     private void Update()
+    {
+        if (!isRunning || character == null)
+            return;
+
+
+        if (!isChatting)
+        {
+            if (Input.GetKey(KeyCode.W)) character.GetComponent<PlayerMovement>().MovePlayer(KeyCode.W);
+            else if (Input.GetKeyUp(KeyCode.W)) character.GetComponent<PlayerMovement>().MovePlayer("W");
+            if (Input.GetKey(KeyCode.D)) character.GetComponent<PlayerMovement>().MovePlayer(KeyCode.D);
+            else if (Input.GetKeyUp(KeyCode.D)) character.GetComponent<PlayerMovement>().MovePlayer("A");
+            if (Input.GetKey(KeyCode.S)) character.GetComponent<PlayerMovement>().MovePlayer(KeyCode.S);
+            else if (Input.GetKeyUp(KeyCode.S)) character.GetComponent<PlayerMovement>().MovePlayer("W");
+            if (Input.GetKey(KeyCode.A)) character.GetComponent<PlayerMovement>().MovePlayer(KeyCode.A);
+            else if (Input.GetKeyUp(KeyCode.A)) character.GetComponent<PlayerMovement>().MovePlayer("A");
+
+            if (Input.GetKeyDown(KeyCode.Return))
+            {
+                isChatting = true;
+
+                input_Chat_text.gameObject.SetActive(true);
+
+                input_Chat_text.Select();
+                input_Chat_text.ActivateInputField();
+            }
+        }
+        else
+        {
+            if (Input.GetKeyDown(KeyCode.Return))
+                HandlePlayerChat();
+        }
+
+
+        positionSendTimer += Time.deltaTime;
+
+        if (positionSendTimer >= positionSendInterval)
+        {
+            positionSendTimer -= positionSendInterval;
+
+            SendPositionToServer(character.transform.position);
+        }
+
+        UpdateRemotePlayers();
+    }
+
+    private void FixedUpdate()
     {
         if (isRunning)
         {
             if (character != null)
             {
-                if (Input.GetKey(KeyCode.W)) HandlePlayerMovement(KeyCode.W);
-                else if (Input.GetKeyUp(KeyCode.W)) character.GetComponent<PlayerMovement>().MovePlayer("W");
-                if (Input.GetKey(KeyCode.D)) HandlePlayerMovement(KeyCode.D);
-                else if (Input.GetKeyUp(KeyCode.D)) character.GetComponent<PlayerMovement>().MovePlayer("A");
-                if (Input.GetKey(KeyCode.S)) HandlePlayerMovement(KeyCode.S);
-                else if (Input.GetKeyUp(KeyCode.S)) character.GetComponent<PlayerMovement>().MovePlayer("W");
-                if (Input.GetKey(KeyCode.A)) HandlePlayerMovement(KeyCode.A);
-                else if (Input.GetKeyUp(KeyCode.A)) character.GetComponent<PlayerMovement>().MovePlayer("A");
-
                 character.GetComponent<PlayerMovement>().SetMovePlayer();
-
-                if (Input.GetKeyDown(KeyCode.Return))
-                    HandlePlayerChat();
             }
         }
     }
 
-    private void HandlePlayerMovement(KeyCode key)
-    {
-        character.GetComponent<PlayerMovement>().MovePlayer(key);
-
-        Vector3 position = character.transform.position;
-        string positionData = sessionToken + ":" + position.x + "," + position.y + "," + position.z;
-        byte[] data = Encoding.UTF8.GetBytes(positionData);
-        byte[] packet = new byte[data.Length + 2];
-        packet[0] = (byte)TcpPacketType.PlayerJoin;
-        packet[1] = (byte)data.Length;
-        Array.Copy(data, 0, packet, 2, data.Length);
-
-        SendPositionToServer(packet);
-    }
-
-    void SendPositionToServer(byte[] data)
+    void SendPositionToServer(Vector3 position)
     {
         if (!sessionReady) return;
 
-        udpClient.Send(data, data.Length);
+        positionSequence++;
+
+        string positionData =
+            sessionToken + ":"
+            + positionSequence + ":"
+            + position.x + ","
+            + position.y + ","
+            + position.z;
+
+        byte[] data = Encoding.UTF8.GetBytes(positionData);
+
+        byte[] packet = new byte[data.Length + 2];
+        packet[0] = (byte)UdpPacketType.Position;
+        packet[1] = (byte)data.Length;
+
+        Array.Copy(data, 0, packet, 2, data.Length);
+
+        udpClient.Send(packet, packet.Length);
 
         text.text += "서버로 내 위치 전송" + "\n";
     }
 
     public void HandlePlayerChat()
     {
-        if (string.IsNullOrEmpty(input_Chat_text.text))
+        string message = input_Chat_text.text;
+
+        input_Chat_text.text = "";
+        input_Chat_text.DeactivateInputField();
+
+        isChatting = false;
+
+        if (string.IsNullOrEmpty(message))
             return;
 
-        byte[] data = Encoding.UTF8.GetBytes(input_Chat_text.text);
+        byte[] data = Encoding.UTF8.GetBytes(message);
 
         if (data.Length > byte.MaxValue)
         {
@@ -129,8 +212,7 @@ public class NetworkClient : MonoBehaviour
             return;
         }
 
-        my_Chat_text.text = input_Chat_text.text;
-        input_Chat_text.text = "";
+        my_Chat_text.text = message;
 
         SendChatMessageToServer(data);
     }
@@ -246,10 +328,74 @@ public class NetworkClient : MonoBehaviour
                 RemoveOtherPlayer(packet);
                 break;
 
+            case (byte)TcpPacketType.SnowItemResult:
+                HandleSnowItemResult(packet);
+                break;
+
+            case (byte)TcpPacketType.SnowItemRespawn:
+                HandleSnowItemRespawn(packet);
+
+                break;
             default:
                 Debug.Log("알 수 없는 패킷 타입:" + packetType);
                 break;
         }
+    }
+
+    void HandleSnowItemResult(byte[] buffer)
+    {
+        int messageLength = buffer[1];
+
+        string data =
+            Encoding.UTF8.GetString(buffer, 2, messageLength);
+
+        string[] parts = data.Split(':');
+
+        if (parts.Length != 3)
+            return;
+
+        if (!int.TryParse(parts[0], out int itemId) ||
+            !int.TryParse(parts[1], out int winnerClientId) ||
+            !int.TryParse(parts[2], out int snowballCount))
+        {
+            return;
+        }
+
+        UnityMainThreadDispatcher.Enqueue(() =>
+        {
+            if (snowItems.TryGetValue(itemId, out SnowItem item))
+            {
+                item.gameObject.SetActive(false);
+            }
+
+            if (winnerClientId == clientId)
+            {
+                mySnowballCount = snowballCount;
+
+                Debug.Log(
+                    $"눈덩이 획득! 현재 개수: {mySnowballCount}"
+                );
+            }
+        });
+    }
+
+    void HandleSnowItemRespawn(byte[] buffer)
+    {
+        int messageLength = buffer[1];
+
+        string data =
+            Encoding.UTF8.GetString(buffer, 2, messageLength);
+
+        if (!int.TryParse(data, out int itemId))
+            return;
+
+        UnityMainThreadDispatcher.Enqueue(() =>
+        {
+            if (snowItems.TryGetValue(itemId, out SnowItem item))
+            {
+                item.gameObject.SetActive(true);
+            }
+        });
     }
 
     void RemoveOtherPlayer(byte[] buffer)
@@ -293,6 +439,13 @@ public class NetworkClient : MonoBehaviour
                 GameObject playerObject = Instantiate(Prefab[color]);
                 otherPlayers[receivedClientId] = playerObject;
                 otherPlayers[receivedClientId].GetComponent<PlayerState>().nameText.text = name;
+
+                Rigidbody rb = playerObject.GetComponent<Rigidbody>();
+                if(rb != null)
+                {
+                    rb.isKinematic = true;
+                    rb.useGravity = false;
+                }
             }
         });
     }
@@ -379,7 +532,7 @@ public class NetworkClient : MonoBehaviour
                 switch (packetType)
                 {
                     //위치
-                    case 0x02:
+                    case (byte)UdpPacketType.Position:
                         UpdatePositionFromServer(buffer);
                         break;
 
@@ -404,9 +557,18 @@ public class NetworkClient : MonoBehaviour
 
         string[] parts = data.Split(':');
         int clientId = int.Parse(parts[0]);
+        int sequence = int.Parse(parts[1]);
 
-        string[] position = parts[1].Split(',');
-        //Debug.Log(position[0] +"," + position[1] +","+ position[2]);
+        if (lastReceivedPositionSequence.TryGetValue(clientId, out int lastSequence))
+        {
+            if (sequence <= lastSequence)
+                return;
+        }
+
+        lastReceivedPositionSequence[clientId] = sequence;
+
+        string[] position = parts[2].Split(',');
+
         float x = float.Parse(position[0]);
         float y = float.Parse(position[1]);
         float z = float.Parse(position[2]);
@@ -423,17 +585,62 @@ public class NetworkClient : MonoBehaviour
     void UpdateOtherClientPosition(int clientID, Vector3 newPosition)
     {
         if (otherPlayers.ContainsKey(clientID))
-            otherPlayers[clientID].transform.position = newPosition;
+        {
+            targetPositions[clientID] = newPosition;
+            //otherPlayers[clientId].transform.position = newPosition;
+        }
+    }
+
+    private void UpdateRemotePlayers()
+    {
+        foreach (var pair in targetPositions)
+        {
+            int clientId = pair.Key;
+            Vector3 targetPosition = pair.Value;
+
+            if (!otherPlayers.TryGetValue(
+                clientId,
+                out GameObject player))
+            {
+                continue;
+            }
+
+            player.transform.position =
+                Vector3.Lerp(
+                    player.transform.position,
+                    targetPosition,
+                    10f * Time.deltaTime
+                );
+        }
     }
 
     public void SetCharacter()
     {
-        character = Instantiate(Prefab[ChoosePrefab]);
         System.Random rand = new System.Random();
-        character.transform.position = SpawnPos[rand.Next(0,SpawnPos.Length)].position;
-        FindObjectOfType<CameraManager>().SetPosition(character.transform);
-        HandlePlayerMovement(KeyCode.Escape);
+        int num = rand.Next(0, SpawnPos.Length);
+
+        character = Instantiate(Prefab[ChoosePrefab], SpawnPos[num].position, Quaternion.identity);
+
+        FindObjectOfType<CameraManager>().SetTarget(character.transform);
+        SendPositionToServer(SpawnPos[num].position);
+
         character.GetComponent<PlayerState>().nameText.text = FindObjectOfType<LodingManager>().Name;
+    }
+
+    public void RequestSnowItem(int itemId)
+    {
+        byte[] data = Encoding.UTF8.GetBytes(itemId.ToString());
+
+        byte[] packet = new byte[data.Length + 2];
+
+        packet[0] = (byte)TcpPacketType.SnowItemRequest;
+        packet[1] = (byte)data.Length;
+
+        Array.Copy(data, 0, packet, 2, data.Length);
+
+        stream.Write(packet, 0, packet.Length);
+
+        Debug.Log($"SnowItem 획득 요청: {itemId}");
     }
 
 

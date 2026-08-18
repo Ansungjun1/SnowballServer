@@ -7,35 +7,46 @@ using TMPro;
 public class PlayerState : MonoBehaviour
 {
     public Slider hpSlider;
+    public TextMeshProUGUI nameText;
     public float MaxHp { get; private set; }
     public float CurrentHp { get; private set; }
 
-    public bool isDead = false;
-    public TextMeshProUGUI nameText;
+    public bool IsDead { get; private set; }
 
-    private void Start()
+    private PlayerMovement movement;
+
+    private void Awake()
     {
-        MaxHp = 3f;
-        CurrentHp = MaxHp;
-
-        if (FindObjectOfType<NetworkClient>().character != gameObject)
-            Destroy(this.GetComponent<PlayerState>());
+        movement = GetComponent<PlayerMovement>();
     }
 
-    private void OnTriggerEnter2D(Collider2D collision)
+    public void SetHp(float hp)
     {
-        if(collision.tag == "Bullet" && !isDead)
+        CurrentHp = Mathf.Clamp(hp, 0f, MaxHp);
+        hpSlider.value = CurrentHp / MaxHp;
+
+        if (CurrentHp <= 0f && !IsDead)
         {
-            CurrentHp -= 1;
-
-            hpSlider.value = CurrentHp / MaxHp;
-
-            if(CurrentHp <= 0f)
-            {
-                isDead = true;
-
-                FindObjectOfType<Dead>().deadAni.gameObject.SetActive(true);
-            }
+            IsDead = true;
+            movement.PlayDeath();
         }
+    }
+
+    public void PlayHit()
+    {
+        if (IsDead)
+            return;
+
+        movement.PlayHit();
+    }
+
+    private void OnTriggerEnter(Collider other)
+    {
+        SnowItem snowItem = other.GetComponent<SnowItem>();
+
+        if (snowItem == null)
+            return;
+
+        FindObjectOfType<NetworkClient>().RequestSnowItem(snowItem.itemId);
     }
 }

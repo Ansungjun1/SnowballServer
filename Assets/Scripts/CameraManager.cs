@@ -6,24 +6,61 @@ public class CameraManager : MonoBehaviour
 {
     public Transform target;
 
-    public float smoothSpeed = 0.125f;
-    public Vector3 offset;
+    [Header("Camera")]
+    public float distance = 6f;
+    public float height = 2f;
 
-    private void FixedUpdate()
+    [Header("Mouse")]
+    public float mouseSensitivity = 3f;
+
+    private float yaw;
+    private float pitch = 20f;
+
+    private void LateUpdate()
     {
-        if(target != null)
-        {
-            Vector3 desiredPosition = target.position + offset;
+        if (target == null)
+            return;
 
-            Vector3 smoothedPosition = Vector3.Lerp(transform.position, desiredPosition, smoothSpeed);
+        // 마우스로 카메라 회전
+        yaw += Input.GetAxis("Mouse X") * mouseSensitivity;
+        pitch -= Input.GetAxis("Mouse Y") * mouseSensitivity;
 
-            transform.position = smoothedPosition;
-        }
+        // 너무 위/아래로 뒤집히지 않도록 제한
+        pitch = Mathf.Clamp(pitch, -10f, 60f);
+
+        Quaternion cameraRotation =
+            Quaternion.Euler(pitch, yaw, 0f);
+
+        Vector3 lookPosition =
+            target.position + Vector3.up * height;
+
+        Vector3 cameraPosition =
+            lookPosition
+            - cameraRotation * Vector3.forward * distance;
+
+        transform.position = cameraPosition;
+        transform.LookAt(lookPosition);
+
+        RotateBody();
     }
 
-    public void SetPosition(Transform transform)
+    private void RotateBody()
     {
-        target = transform;
-        this.transform.position = transform.position;
+        // 카메라의 위/아래 각도는 제거
+        Vector3 forward = transform.forward;
+        forward.y = 0f;
+
+        if (forward.sqrMagnitude < 0.001f)
+            return;
+
+        target.rotation =
+            Quaternion.LookRotation(forward.normalized);
+    }
+
+    public void SetTarget(Transform target)
+    {
+        this.target = target;
+
+        yaw = target.eulerAngles.y;
     }
 }
