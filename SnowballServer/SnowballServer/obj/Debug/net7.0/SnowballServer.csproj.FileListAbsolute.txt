@@ -1,0 +1,15 @@
+C:\Users\User\source\repos\SnowballServer\SnowballServer\obj\Debug\net7.0\SnowballServer.csproj.AssemblyReference.cache
+C:\Users\User\source\repos\SnowballServer\SnowballServer\obj\Debug\net7.0\SnowballServer.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\User\source\repos\SnowballServer\SnowballServer\obj\Debug\net7.0\SnowballServer.AssemblyInfoInputs.cache
+C:\Users\User\source\repos\SnowballServer\SnowballServer\obj\Debug\net7.0\SnowballServer.AssemblyInfo.cs
+C:\Users\User\source\repos\SnowballServer\SnowballServer\obj\Debug\net7.0\SnowballServer.csproj.CoreCompileInputs.cache
+C:\Users\User\source\repos\SnowballServer\SnowballServer\bin\Debug\net7.0\SnowballServer.exe
+C:\Users\User\source\repos\SnowballServer\SnowballServer\bin\Debug\net7.0\SnowballServer.deps.json
+C:\Users\User\source\repos\SnowballServer\SnowballServer\bin\Debug\net7.0\SnowballServer.runtimeconfig.json
+C:\Users\User\source\repos\SnowballServer\SnowballServer\bin\Debug\net7.0\SnowballServer.dll
+C:\Users\User\source\repos\SnowballServer\SnowballServer\bin\Debug\net7.0\SnowballServer.pdb
+C:\Users\User\source\repos\SnowballServer\SnowballServer\obj\Debug\net7.0\SnowballServer.dll
+C:\Users\User\source\repos\SnowballServer\SnowballServer\obj\Debug\net7.0\refint\SnowballServer.dll
+C:\Users\User\source\repos\SnowballServer\SnowballServer\obj\Debug\net7.0\SnowballServer.pdb
+C:\Users\User\source\repos\SnowballServer\SnowballServer\obj\Debug\net7.0\SnowballServer.genruntimeconfig.cache
+C:\Users\User\source\repos\SnowballServer\SnowballServer\obj\Debug\net7.0\ref\SnowballServer.dll

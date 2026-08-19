@@ -65,6 +65,7 @@ public class NetworkClient : MonoBehaviour
     private int mySnowballCount = 0;
 
     private Dictionary<int, Vector3> targetPositions = new Dictionary<int, Vector3>();
+    private Dictionary<int, float> targetYaws = new Dictionary<int, float>();
     private float positionSendInterval = 0.05f; // 20Hz
     private float positionSendTimer = 0f;
 
@@ -172,12 +173,15 @@ public class NetworkClient : MonoBehaviour
 
         positionSequence++;
 
+        float yaw = character.transform.eulerAngles.y;
+
         string positionData =
             sessionToken + ":"
             + positionSequence + ":"
             + position.x + ","
             + position.y + ","
-            + position.z;
+            + position.z + ":"
+            + yaw;
 
         byte[] data = Encoding.UTF8.GetBytes(positionData);
 
@@ -264,6 +268,49 @@ public class NetworkClient : MonoBehaviour
         }
     }
 
+    async Task ListenForUdpMessage()
+    {
+        while (isRunning)
+        {
+            try
+            {
+                UdpReceiveResult result = await udpClient.ReceiveAsync();
+                byte[] buffer = result.Buffer;
+
+
+                if (buffer == null || buffer.Length < 2)
+                {
+                    Debug.Log("잘못된 UDP 패킷");
+                    continue;
+                }
+
+                byte packetType = buffer[0];
+                int messageLength = buffer[1];
+
+                if (buffer.Length != 2 + messageLength)
+                {
+                    Debug.Log("UDP 패킷 길이 오류");
+                    continue;
+                }
+
+                switch (packetType)
+                {
+                    //위치
+                    case (byte)UdpPacketType.Position:
+                        UpdatePositionFromServer(buffer);
+                        break;
+
+                    default:
+                        Debug.Log("알 수 없는 패킷 타입:" + packetType);
+                        break;
+                }
+            }
+            catch (Exception e)
+            {
+                Debug.Log("UDP 요청 수신 실패: " + e);
+            }
+        }
+    }
     void ProcessTcpPackets(List<byte> receiveBuffer, int clientId)
     {
         const int headerSize = 2;
@@ -504,50 +551,6 @@ public class NetworkClient : MonoBehaviour
         chat_text.text = chat;
     }
 
-    async Task ListenForUdpMessage()
-    {
-        while (isRunning)
-        {
-            try
-            {
-                UdpReceiveResult result = await udpClient.ReceiveAsync();
-                byte[] buffer = result.Buffer;
-
-                
-                if (buffer == null || buffer.Length < 2)
-                {
-                    Debug.Log("잘못된 UDP 패킷");
-                    continue;
-                }
-
-                byte packetType = buffer[0];
-                int messageLength = buffer[1];
-
-                if (buffer.Length != 2 + messageLength)
-                {
-                    Debug.Log("UDP 패킷 길이 오류");
-                    continue;
-                }
-
-                switch (packetType)
-                {
-                    //위치
-                    case (byte)UdpPacketType.Position:
-                        UpdatePositionFromServer(buffer);
-                        break;
-
-                    default:
-                        Debug.Log("알 수 없는 패킷 타입:" + packetType);
-                        break;
-                }
-            }
-            catch (Exception e)
-            {
-                Debug.Log("UDP 요청 수신 실패: " + e);
-            }
-        }
-    }
-
     void UpdatePositionFromServer(byte[] buffer)
     {
         byte messageLength = buffer[1];
@@ -573,20 +576,23 @@ public class NetworkClient : MonoBehaviour
         float y = float.Parse(position[1]);
         float z = float.Parse(position[2]);
 
+        float yaw = float.Parse(parts[3]);
+
         Vector3 newPosition = new Vector3(x, y, z);
 
         UnityMainThreadDispatcher.Enqueue(() =>
         {
-            UpdateOtherClientPosition(clientId, newPosition);
+            UpdateOtherClientPosition(clientId, newPosition, yaw);
             text.text += ("위치 변경");
         });
     }
 
-    void UpdateOtherClientPosition(int clientID, Vector3 newPosition)
+    void UpdateOtherClientPosition(int clientID, Vector3 newPosition, float yaw)
     {
         if (otherPlayers.ContainsKey(clientID))
         {
             targetPositions[clientID] = newPosition;
+            targetYaws[clientID] = yaw;
             //otherPlayers[clientId].transform.position = newPosition;
         }
     }
@@ -598,9 +604,7 @@ public class NetworkClient : MonoBehaviour
             int clientId = pair.Key;
             Vector3 targetPosition = pair.Value;
 
-            if (!otherPlayers.TryGetValue(
-                clientId,
-                out GameObject player))
+            if (!otherPlayers.TryGetValue(clientId, out GameObject player))
             {
                 continue;
             }
@@ -611,6 +615,18 @@ public class NetworkClient : MonoBehaviour
                     targetPosition,
                     10f * Time.deltaTime
                 );
+
+
+            if (targetYaws.TryGetValue(clientId, out float targetYaw))
+            {
+                Quaternion targetRotation = Quaternion.Euler(0f, targetYaw, 0f);
+
+                player.transform.rotation = Quaternion.Slerp(
+                    player.transform.rotation,
+                    targetRotation,
+                    10f * Time.deltaTime
+                );
+            }
         }
     }
 
