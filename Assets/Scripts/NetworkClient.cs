@@ -20,7 +20,8 @@ enum TcpPacketType : byte
     SnowItemRequest = 0x05,
     SnowItemResult = 0x06,
     SnowItemRespawn = 0x07,
-    SnowballThrowRequest = 0x08
+    SnowballThrowRequest = 0x08,
+    SnowballSpawn = 0x09
 }
 
 enum UdpPacketType : byte
@@ -69,6 +70,10 @@ public class NetworkClient : MonoBehaviour
     private Dictionary<int, float> targetYaws = new Dictionary<int, float>();
     private float positionSendInterval = 0.05f; // 20Hz
     private float positionSendTimer = 0f;
+
+    public GameObject snowballPrefab;
+
+    private Dictionary<int, GameObject> snowballObjects = new Dictionary<int, GameObject>();
 
     private void Start()
     {
@@ -386,6 +391,11 @@ public class NetworkClient : MonoBehaviour
 
             case (byte)TcpPacketType.SnowItemRespawn:
                 HandleSnowItemRespawn(packet);
+                break;
+
+            case (byte)TcpPacketType.SnowballSpawn:
+                HandleSnowballSpawn(packet);
+                break;
 
                 break;
             default:
@@ -672,6 +682,80 @@ public class NetworkClient : MonoBehaviour
         packet[1] = 0;
 
         stream.Write(packet, 0, packet.Length);
+    }
+
+    void HandleSnowballSpawn(byte[] buffer)
+    {
+        int messageLength = buffer[1];
+
+        string data = Encoding.UTF8.GetString(buffer, 2, messageLength);
+
+        string[] parts = data.Split(':');
+
+        if (parts.Length != 5)
+            return;
+
+        if (!int.TryParse(parts[0], out int snowballId))
+            return;
+
+        if (!int.TryParse(parts[1], out int ownerId))
+            return;
+
+        string[] positionParts = parts[2].Split(',');
+        string[] directionParts = parts[3].Split(',');
+
+        if (positionParts.Length != 3 ||
+            directionParts.Length != 3)
+            return;
+
+        if (!float.TryParse(positionParts[0], out float x) ||
+            !float.TryParse(positionParts[1], out float y) ||
+            !float.TryParse(positionParts[2], out float z) ||
+            !float.TryParse(directionParts[0], out float dirX) ||
+            !float.TryParse(directionParts[1], out float dirY) ||
+            !float.TryParse(directionParts[2], out float dirZ) ||
+            !float.TryParse(parts[4], out float speed))
+        {
+            return;
+        }
+
+        Vector3 position = new Vector3(x, y, z);
+        Vector3 direction = new Vector3(dirX, dirY, dirZ);
+
+        UnityMainThreadDispatcher.Enqueue(() =>
+        {
+            SpawnSnowball(
+                snowballId,
+                ownerId,
+                position,
+                direction,
+                speed);
+        });
+    }
+
+    void SpawnSnowball(
+        int snowballId,
+        int ownerId,
+        Vector3 position,
+        Vector3 direction,
+        float speed)
+    {
+        if (snowballObjects.ContainsKey(snowballId))
+            return;
+
+        GameObject snowball =
+            Instantiate(
+                snowballPrefab,
+                position,
+                Quaternion.identity);
+
+        snowballObjects[snowballId] = snowball;
+
+        SnowballMovement movement = snowball.GetComponent<SnowballMovement>();
+
+        movement.Initialize(
+            direction,
+            speed);
     }
 
     void OnApplicationQuit()

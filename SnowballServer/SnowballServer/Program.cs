@@ -39,6 +39,16 @@ namespace SnowballServer
     }
 
 
+    class SnowballState
+    {
+        public int Id;
+        public int OwnerId;
+
+        public Vector3 Position;
+        public Vector3 Direction;
+
+        public float Speed;
+    }
 
     class SnowItemState
     {
@@ -57,7 +67,8 @@ namespace SnowballServer
         SnowItemRequest = 0x05,
         SnowItemResult = 0x06,
         SnowItemRespawn = 0x07,
-        SnowballThrowRequest = 0x08
+        SnowballThrowRequest = 0x08,
+        SnowballSpawn = 0x09,
     }
 
     enum UdpPacketType : byte
@@ -82,6 +93,10 @@ namespace SnowballServer
         private Dictionary<int, SnowItemState> snowItems = new Dictionary<int, SnowItemState>();
 
         private ConcurrentDictionary<int, int> snowballCounts = new ConcurrentDictionary<int, int>();
+
+        private ConcurrentDictionary<int, SnowballState> snowballs = new ConcurrentDictionary<int, SnowballState>();
+
+        private int nextSnowballId = 0;
 
         private int nextClientId = 0;
 
@@ -740,12 +755,76 @@ namespace SnowballServer
                 MathF.Cos(rad)
             );
 
+
+            int snowballId = Interlocked.Increment(ref nextSnowballId);
+
+            Vector3 spawnPosition = playerPosition + direction * 1.0f;
+
+            SnowballState snowball = new SnowballState
+            {
+                Id = snowballId,
+                OwnerId = clientId,
+                Position = spawnPosition,
+                Direction = direction,
+                Speed = 10f
+            };
+
+            snowballs[snowballId] = snowball;
+
+            BroadcastSnowballSpawn(snowball);
+
             Console.WriteLine(
-                $"Client {clientId} 눈덩이 투척 / " +
-                $"남은 개수: {snowballCounts[clientId]} / " +
-                $"방향: {direction}"
-            );
+    $"Snowball {snowballId} 생성 / " +
+    $"Owner {clientId} / " +
+    $"Position {spawnPosition}"
+);
         }
+
+        void BroadcastSnowballSpawn(SnowballState snowball)
+        {
+            string payload =
+                $"{snowball.Id}:"
+                + $"{snowball.OwnerId}:"
+                + $"{snowball.Position.X},"
+                + $"{snowball.Position.Y},"
+                + $"{snowball.Position.Z}:"
+                + $"{snowball.Direction.X},"
+                + $"{snowball.Direction.Y},"
+                + $"{snowball.Direction.Z}:"
+                + $"{snowball.Speed}";
+
+            byte[] data = Encoding.UTF8.GetBytes(payload);
+
+            byte[] packet = new byte[data.Length + 2];
+
+            packet[0] = (byte)TcpPacketType.SnowballSpawn;
+
+            packet[1] = (byte)data.Length;
+
+            Array.Copy(
+                data,
+                0,
+                packet,
+                2,
+                data.Length
+            );
+
+            foreach (var client in tcpClients)
+            {
+                if (!client.Value.Connected)
+                    continue;
+
+                NetworkStream stream =
+                    client.Value.GetStream();
+
+                stream.Write(
+                    packet,
+                    0,
+                    packet.Length
+                );
+            }
+        }
+
         void OnApplicationQuit()
         {
             foreach (var client in tcpClients)

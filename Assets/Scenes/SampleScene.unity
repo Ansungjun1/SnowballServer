@@ -15739,6 +15739,7 @@ MonoBehaviour:
   - {fileID: 2960358226858211637}
   - {fileID: 4995984005901685041}
   - {fileID: 8890883349766046988}
+  snowballPrefab: {fileID: 6943339506522990612, guid: d0cbc48d73ce2f44e82780455b0a1dc1, type: 3}
 --- !u!1001 &212897374
 PrefabInstance:
   m_ObjectHideFlags: 0
