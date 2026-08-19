@@ -56,7 +56,8 @@ namespace SnowballServer
 
         SnowItemRequest = 0x05,
         SnowItemResult = 0x06,
-        SnowItemRespawn = 0x07
+        SnowItemRespawn = 0x07,
+        SnowballThrowRequest = 0x08
     }
 
     enum UdpPacketType : byte
@@ -367,6 +368,10 @@ namespace SnowballServer
                     HandleSnowItemRequest(packet, clientId);
                     break;
 
+                case (byte)TcpPacketType.SnowballThrowRequest:
+                    HandleSnowballThrowRequest(clientId);
+                    break;
+
                 default:
                     Console.WriteLine("알 수 없는 TCP 패킷 타입: " + packetType);
                     break;
@@ -563,7 +568,7 @@ namespace SnowballServer
                 $"{clientPositions[senderID].X}," +
                 $"{clientPositions[senderID].Y}," +
                 $"{clientPositions[senderID].Z}:" +
-                $"{clientYaws[senderID]}";B
+                $"{clientYaws[senderID]}";
             //Debug.Log("데이터 취합: " + position + "그리고" + senderID);
 
             byte[] data = Encoding.UTF8.GetBytes(position);
@@ -697,6 +702,49 @@ namespace SnowballServer
                 NetworkStream stream = client.Value.GetStream();
                 stream.Write(packet, 0, packet.Length);
             }
+        }
+
+        void HandleSnowballThrowRequest(int clientId)
+        {
+            if (!snowballCounts.TryGetValue(
+                clientId,
+                out int snowballCount))
+            {
+                return;
+            }
+
+            if (snowballCount <= 0)
+                return;
+
+            if (!clientPositions.TryGetValue(
+                clientId,
+                out Vector3 playerPosition))
+            {
+                return;
+            }
+
+            if (!clientYaws.TryGetValue(
+                clientId,
+                out float yaw))
+            {
+                return;
+            }
+
+            snowballCounts[clientId]--;
+
+            float rad = yaw * MathF.PI / 180f;
+
+            Vector3 direction = new Vector3(
+                MathF.Sin(rad),
+                0f,
+                MathF.Cos(rad)
+            );
+
+            Console.WriteLine(
+                $"Client {clientId} 눈덩이 투척 / " +
+                $"남은 개수: {snowballCounts[clientId]} / " +
+                $"방향: {direction}"
+            );
         }
         void OnApplicationQuit()
         {

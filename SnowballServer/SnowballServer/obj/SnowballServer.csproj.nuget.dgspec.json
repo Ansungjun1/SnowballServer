@@ -1,17 +1,17 @@
 {
   "format": 1,
   "restore": {
-    "C:\\Users\\User\\source\\repos\\SnowballServer\\SnowballServer\\SnowballServer.csproj": {}
+    "D:\\Unity\\SnowballServer\\SnowballServer\\SnowballServer\\SnowballServer.csproj": {}
   },
   "projects": {
-    "C:\\Users\\User\\source\\repos\\SnowballServer\\SnowballServer\\SnowballServer.csproj": {
+    "D:\\Unity\\SnowballServer\\SnowballServer\\SnowballServer\\SnowballServer.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "C:\\Users\\User\\source\\repos\\SnowballServer\\SnowballServer\\SnowballServer.csproj",
+        "projectUniqueName": "D:\\Unity\\SnowballServer\\SnowballServer\\SnowballServer\\SnowballServer.csproj",
         "projectName": "SnowballServer",
-        "projectPath": "C:\\Users\\User\\source\\repos\\SnowballServer\\SnowballServer\\SnowballServer.csproj",
+        "projectPath": "D:\\Unity\\SnowballServer\\SnowballServer\\SnowballServer\\SnowballServer.csproj",
         "packagesPath": "C:\\Users\\User\\.nuget\\packages\\",
-        "outputPath": "C:\\Users\\User\\source\\repos\\SnowballServer\\SnowballServer\\obj\\",
+        "outputPath": "D:\\Unity\\SnowballServer\\SnowballServer\\SnowballServer\\obj\\",
         "projectStyle": "PackageReference",
         "fallbackFolders": [
           "C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages"

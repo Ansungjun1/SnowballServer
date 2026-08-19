@@ -19,7 +19,8 @@ enum TcpPacketType : byte
 
     SnowItemRequest = 0x05,
     SnowItemResult = 0x06,
-    SnowItemRespawn = 0x07
+    SnowItemRespawn = 0x07,
+    SnowballThrowRequest = 0x08
 }
 
 enum UdpPacketType : byte
@@ -135,6 +136,10 @@ public class NetworkClient : MonoBehaviour
 
                 input_Chat_text.Select();
                 input_Chat_text.ActivateInputField();
+            }
+            else if(Input.GetMouseButtonDown(0))
+            {
+                RequestThrowSnowball();
             }
         }
         else
@@ -659,6 +664,15 @@ public class NetworkClient : MonoBehaviour
         Debug.Log($"SnowItem »πµÊ ø‰√ª: {itemId}");
     }
 
+    public void RequestThrowSnowball()
+    {
+        byte[] packet = new byte[2];
+
+        packet[0] = (byte)TcpPacketType.SnowballThrowRequest;
+        packet[1] = 0;
+
+        stream.Write(packet, 0, packet.Length);
+    }
 
     void OnApplicationQuit()
     {
