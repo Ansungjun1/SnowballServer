@@ -16,6 +16,14 @@ public class PlayerMovement : MonoBehaviour
 
     private Rigidbody rb;
 
+    public bool IsMoving
+    {
+        get
+        {
+            return moveX != 0f || moveZ != 0f;
+        }
+    }
+
     private void Start()
     {
         animator = GetComponent<Animator>();
@@ -55,6 +63,8 @@ public class PlayerMovement : MonoBehaviour
         }
     }
 
+
+
     public void SetMovePlayer()
     {
         Vector3 cameraForward = Camera.main.transform.forward;
@@ -83,9 +93,10 @@ public class PlayerMovement : MonoBehaviour
 
     private void UpdateAnimation(Vector3 moveDirection)
     {
-        float movement = moveDirection.magnitude;
+        //float movement = moveDirection.magnitude;
+        //animator.SetFloat("Speed", movement);
 
-        animator.SetFloat("Speed", movement);
+        animator.SetBool("IsMoving", IsMoving);
     }
 
     public void PlayThrow()

@@ -21,7 +21,8 @@ enum TcpPacketType : byte
     SnowItemResult = 0x06,
     SnowItemRespawn = 0x07,
     SnowballThrowRequest = 0x08,
-    SnowballSpawn = 0x09
+    SnowballSpawn = 0x09,
+    SnowballDespawn = 0x0A,
 }
 
 enum UdpPacketType : byte
@@ -105,6 +106,7 @@ public class NetworkClient : MonoBehaviour
         udpClient = new UdpClient();
         udpClient.Connect(serverIP, port);
         Debug.Log("UDP서버 연결");
+
         _ = ListenForUdpMessage();
     }
     void RegisterSnowItems()
@@ -185,13 +187,16 @@ public class NetworkClient : MonoBehaviour
 
         float yaw = character.transform.eulerAngles.y;
 
+        PlayerMovement movement = character.GetComponent<PlayerMovement>();
+
         string positionData =
             sessionToken + ":"
             + positionSequence + ":"
             + position.x + ","
             + position.y + ","
             + position.z + ":"
-            + yaw;
+            + yaw + ":"
+            + (movement.IsMoving ? "1" : "0");
 
         byte[] data = Encoding.UTF8.GetBytes(positionData);
 
@@ -397,11 +402,52 @@ public class NetworkClient : MonoBehaviour
                 HandleSnowballSpawn(packet);
                 break;
 
+            case (byte)TcpPacketType.SnowballDespawn:
+                HandleSnowballDespawn(packet);
                 break;
+
             default:
                 Debug.Log("알 수 없는 패킷 타입:" + packetType);
                 break;
         }
+    }
+
+    void HandleSnowballDespawn(byte[] buffer)
+    {
+        int messageLength = buffer[1];
+
+        string data =
+            Encoding.UTF8.GetString(
+                buffer,
+                2,
+                messageLength
+            );
+
+        if (!int.TryParse(
+            data,
+            out int snowballId))
+        {
+            return;
+        }
+
+        UnityMainThreadDispatcher.Enqueue(() =>
+        {
+            RemoveSnowballObject(snowballId);
+        });
+    }
+
+    void RemoveSnowballObject(int snowballId)
+    {
+        if (!snowballObjects.TryGetValue(
+            snowballId,
+            out GameObject snowball))
+        {
+            return;
+        }
+
+        Destroy(snowball);
+
+        snowballObjects.Remove(snowballId);
     }
 
     void HandleSnowItemResult(byte[] buffer)
@@ -571,7 +617,7 @@ public class NetworkClient : MonoBehaviour
         byte messageLength = buffer[1];
         //위치 데이터 수신
         string data = Encoding.UTF8.GetString(buffer, 2, messageLength);
-        //Debug.Log("위치 데이터 수신: " + data);
+        
 
         string[] parts = data.Split(':');
         int clientId = int.Parse(parts[0]);
@@ -583,6 +629,9 @@ public class NetworkClient : MonoBehaviour
                 return;
         }
 
+        Debug.Log("위치 데이터 수신: " + data);
+        Debug.Log($"parts.Length = {parts.Length}");
+
         lastReceivedPositionSequence[clientId] = sequence;
 
         string[] position = parts[2].Split(',');
@@ -593,22 +642,28 @@ public class NetworkClient : MonoBehaviour
 
         float yaw = float.Parse(parts[3]);
 
+        bool isMoving = parts[4] == "1";
+
         Vector3 newPosition = new Vector3(x, y, z);
 
         UnityMainThreadDispatcher.Enqueue(() =>
         {
-            UpdateOtherClientPosition(clientId, newPosition, yaw);
+            UpdateOtherClientPosition(clientId, newPosition, yaw, isMoving);
             text.text += ("위치 변경");
         });
     }
 
-    void UpdateOtherClientPosition(int clientID, Vector3 newPosition, float yaw)
+    void UpdateOtherClientPosition(int clientID, Vector3 newPosition, float yaw, bool isMoving)
     {
-        if (otherPlayers.ContainsKey(clientID))
+        if (otherPlayers.TryGetValue(clientID, out GameObject player))
         {
             targetPositions[clientID] = newPosition;
             targetYaws[clientID] = yaw;
-            //otherPlayers[clientId].transform.position = newPosition;
+
+            Animator animator = player.GetComponent<Animator>();
+
+            if (animator != null)
+                animator.SetBool("IsMoving", isMoving);
         }
     }
 
@@ -756,6 +811,24 @@ public class NetworkClient : MonoBehaviour
         movement.Initialize(
             direction,
             speed);
+
+
+
+        Animator animator = null;
+
+        if (ownerId == clientId)
+        {
+            animator = character.GetComponent<Animator>();
+        }
+        else if (otherPlayers.TryGetValue(ownerId, out GameObject ownerPlayer))
+        {
+            animator = ownerPlayer.GetComponent<Animator>();
+        }
+
+        if (animator != null)
+        {
+            animator.SetTrigger("Throw");
+        }
     }
 
     void OnApplicationQuit()

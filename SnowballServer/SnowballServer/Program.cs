@@ -34,6 +34,8 @@ namespace SnowballServer
             NetworkServer networkServer = new NetworkServer();
             networkServer.Connect();
 
+            _ = networkServer.StartGameLoop();
+
             await Task.Delay(Timeout.Infinite);
         }
     }
@@ -48,6 +50,8 @@ namespace SnowballServer
         public Vector3 Direction;
 
         public float Speed;
+
+        public float LifeTime;
     }
 
     class SnowItemState
@@ -69,6 +73,7 @@ namespace SnowballServer
         SnowItemRespawn = 0x07,
         SnowballThrowRequest = 0x08,
         SnowballSpawn = 0x09,
+        SnowballDespawn = 0x0A,
     }
 
     enum UdpPacketType : byte
@@ -99,6 +104,21 @@ namespace SnowballServer
         private int nextSnowballId = 0;
 
         private int nextClientId = 0;
+
+        public async Task StartGameLoop()
+        {
+            const float tickRate = 20f;
+            const float deltaTime = 1f / tickRate;
+
+            int delayMs = (int)(1000f / tickRate);
+
+            while (isRunning)
+            {
+                UpdateSnowballs(deltaTime);
+
+                await Task.Delay(delayMs);
+            }
+        }
 
         public void Connect()
         {
@@ -525,9 +545,9 @@ namespace SnowballServer
             string data = Encoding.UTF8.GetString(buffer, 2, messageLength);
             //Debug.Log("위치 데이터 수신: " + data);
 
-            string[] parts = data.Split(':', 4);
+            string[] parts = data.Split(':', 5);
 
-            if (parts.Length != 4)
+            if (parts.Length != 5)
                 return;
 
             string token = parts[0];
@@ -557,6 +577,8 @@ namespace SnowballServer
 
             float yaw = float.Parse(parts[3]);
 
+            bool isMoving = parts[4] == "1";
+
             clientYaws[clientId] = yaw;
 
             if (!udpClients.TryGetValue(clientId, out IPEndPoint registeredEndPoint))
@@ -573,17 +595,18 @@ namespace SnowballServer
 
 
             //다른 클라이언트에게 새로운 위치 전송
-            BroadcastPositionToClients(clientId, sequence);
+            BroadcastPositionToClients(clientId, sequence, isMoving);
         }
 
-        void BroadcastPositionToClients(int senderID, int sequence)
+        void BroadcastPositionToClients(int senderID, int sequence, bool isMoving)
         {
             string position = 
                 $"{senderID}:{sequence}:" +
                 $"{clientPositions[senderID].X}," +
                 $"{clientPositions[senderID].Y}," +
                 $"{clientPositions[senderID].Z}:" +
-                $"{clientYaws[senderID]}";
+                $"{clientYaws[senderID]}:" +
+                $"{(isMoving ? "1" : "0")}";
             //Debug.Log("데이터 취합: " + position + "그리고" + senderID);
 
             byte[] data = Encoding.UTF8.GetBytes(position);
@@ -758,7 +781,7 @@ namespace SnowballServer
 
             int snowballId = Interlocked.Increment(ref nextSnowballId);
 
-            Vector3 spawnPosition = playerPosition + direction * 1.0f;
+            Vector3 spawnPosition = playerPosition + new Vector3(0f, 1f, 0f) + direction * 1.0f;
 
             SnowballState snowball = new SnowballState
             {
@@ -766,7 +789,8 @@ namespace SnowballServer
                 OwnerId = clientId,
                 Position = spawnPosition,
                 Direction = direction,
-                Speed = 10f
+                Speed = 10f,
+                LifeTime = 3f,
             };
 
             snowballs[snowballId] = snowball;
@@ -808,6 +832,104 @@ namespace SnowballServer
                 2,
                 data.Length
             );
+
+            foreach (var client in tcpClients)
+            {
+                if (!client.Value.Connected)
+                    continue;
+
+                NetworkStream stream =
+                    client.Value.GetStream();
+
+                stream.Write(
+                    packet,
+                    0,
+                    packet.Length
+                );
+            }
+        }
+
+        void UpdateSnowballs(float deltaTime)
+        {
+            List<int> removeSnowballIds = new List<int>();
+
+            foreach (var pair in snowballs)
+            {
+                SnowballState snowball = pair.Value;
+
+                snowball.Position +=
+                    snowball.Direction
+                    * snowball.Speed
+                    * deltaTime;
+
+                snowball.LifeTime -= deltaTime;
+
+                if (snowball.LifeTime <= 0f)
+                {
+                    removeSnowballIds.Add(snowball.Id);
+                }
+
+                foreach (var player in clientPositions)
+                {
+                    int playerId = player.Key;
+                    Vector3 playerPosition = player.Value;
+
+                    // 내가 던진 눈덩이에 내가 맞지 않도록
+                    if (playerId == snowball.OwnerId)
+                        continue;
+
+                    float dx = snowball.Position.X - playerPosition.X;
+
+                    float dz = snowball.Position.Z - playerPosition.Z;
+
+                    float distance = MathF.Sqrt(dx * dx + dz * dz);
+
+                    if (distance <= 0.7f)
+                    {
+                        Console.WriteLine(
+                            $"Snowball {snowball.Id} Hit! " +
+                            $"Owner {snowball.OwnerId} -> Player {playerId}"
+                        );
+
+                        removeSnowballIds.Add(snowball.Id);
+                        break;
+                    }
+                }
+            }
+
+            foreach (int snowballId in removeSnowballIds)
+            {
+                RemoveSnowball(snowballId);
+            }
+        }
+
+        void RemoveSnowball(int snowballId)
+        {
+            if (!snowballs.TryRemove(
+                snowballId,
+                out SnowballState snowball))
+            {
+                return;
+            }
+
+            Console.WriteLine(
+                $"Snowball {snowballId} 제거"
+            );
+
+            BroadcastSnowballDespawn(snowballId);
+        }
+
+        void BroadcastSnowballDespawn(int snowballId)
+        {
+            byte[] data = Encoding.UTF8.GetBytes(snowballId.ToString());
+
+            byte[] packet = new byte[data.Length + 2];
+
+            packet[0] = (byte)TcpPacketType.SnowballDespawn;
+
+            packet[1] = (byte)data.Length;
+
+            Array.Copy(data, 0, packet, 2, data.Length);
 
             foreach (var client in tcpClients)
             {
