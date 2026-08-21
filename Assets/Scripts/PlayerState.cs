@@ -18,6 +18,9 @@ public class PlayerState : MonoBehaviour
     private void Awake()
     {
         movement = GetComponent<PlayerMovement>();
+        MaxHp = 3;
+        CurrentHp = 3;
+        SetHp(3);
     }
 
     public void SetHp(float hp)

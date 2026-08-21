@@ -74,6 +74,7 @@ namespace SnowballServer
         SnowballThrowRequest = 0x08,
         SnowballSpawn = 0x09,
         SnowballDespawn = 0x0A,
+        PlayerHit = 0x0B,
     }
 
     enum UdpPacketType : byte
@@ -94,6 +95,7 @@ namespace SnowballServer
         private ConcurrentDictionary<int, int> clientColor = new ConcurrentDictionary<int, int>();
         private ConcurrentDictionary<int, string> clientName = new ConcurrentDictionary<int, string>();
         private ConcurrentDictionary<int, int> lastPositionSequence = new ConcurrentDictionary<int, int>();
+        private ConcurrentDictionary<int, int> playerHps = new ConcurrentDictionary<int, int>();
 
         private Dictionary<int, SnowItemState> snowItems = new Dictionary<int, SnowItemState>();
 
@@ -194,6 +196,8 @@ namespace SnowballServer
                     string token = Guid.NewGuid().ToString("N");
 
                     tokens[token] = clientId;
+
+                    playerHps[clientId] = 3;
 
                     Console.WriteLine($"클라이언트 {clientId} 연결");
 
@@ -886,9 +890,9 @@ namespace SnowballServer
 
                     if (distance <= 0.7f)
                     {
-                        Console.WriteLine(
-                            $"Snowball {snowball.Id} Hit! " +
-                            $"Owner {snowball.OwnerId} -> Player {playerId}"
+                        HandlePlayerHit(
+                            snowball.OwnerId,
+                            playerId
                         );
 
                         removeSnowballIds.Add(snowball.Id);
@@ -900,6 +904,75 @@ namespace SnowballServer
             foreach (int snowballId in removeSnowballIds)
             {
                 RemoveSnowball(snowballId);
+            }
+        }
+
+        void HandlePlayerHit(
+            int attackerId,
+            int targetId)
+        {
+            if (!playerHps.TryGetValue(
+                targetId,
+                out int currentHp))
+            {
+                return;
+            }
+
+            if (currentHp <= 0)
+                return;
+
+            currentHp--;
+
+            playerHps[targetId] = currentHp;
+
+            BroadcastPlayerHit(
+                targetId,
+                attackerId,
+                currentHp
+            );
+        }
+
+        void BroadcastPlayerHit(
+            int targetId,
+            int attackerId,
+            int currentHp)
+        {
+            string payload =
+                $"{targetId}:{attackerId}:{currentHp}";
+
+            byte[] data =
+                Encoding.UTF8.GetBytes(payload);
+
+            byte[] packet =
+                new byte[data.Length + 2];
+
+            packet[0] =
+                (byte)TcpPacketType.PlayerHit;
+
+            packet[1] =
+                (byte)data.Length;
+
+            Array.Copy(
+                data,
+                0,
+                packet,
+                2,
+                data.Length
+            );
+
+            foreach (var client in tcpClients)
+            {
+                if (!client.Value.Connected)
+                    continue;
+
+                NetworkStream stream =
+                    client.Value.GetStream();
+
+                stream.Write(
+                    packet,
+                    0,
+                    packet.Length
+                );
             }
         }
 

@@ -23,6 +23,7 @@ enum TcpPacketType : byte
     SnowballThrowRequest = 0x08,
     SnowballSpawn = 0x09,
     SnowballDespawn = 0x0A,
+    PlayerHit = 0x0B,
 }
 
 enum UdpPacketType : byte
@@ -406,9 +407,71 @@ public class NetworkClient : MonoBehaviour
                 HandleSnowballDespawn(packet);
                 break;
 
+            case (byte)TcpPacketType.PlayerHit:
+                HandlePlayerHit(packet);
+                break;
+
             default:
                 Debug.Log("알 수 없는 패킷 타입:" + packetType);
                 break;
+        }
+    }
+
+    void HandlePlayerHit(byte[] buffer)
+    {
+        int messageLength = buffer[1];
+
+        string data =
+            Encoding.UTF8.GetString(
+                buffer,
+                2,
+                messageLength
+            );
+
+        string[] parts = data.Split(':');
+
+        if (parts.Length != 3)
+            return;
+
+        if (!int.TryParse(parts[0], out int targetId) ||
+            !int.TryParse(parts[1], out int attackerId) ||
+            !int.TryParse(parts[2], out int currentHp))
+        {
+            return;
+        }
+
+        UnityMainThreadDispatcher.Enqueue(() =>
+        {
+            ApplyPlayerHit(
+                targetId,
+                currentHp
+            );
+        });
+    }
+
+    void ApplyPlayerHit(
+        int targetId,
+        int currentHp)
+    {
+        GameObject targetPlayer;
+
+        if (targetId == clientId)
+        {
+            targetPlayer = character;
+        }
+        else if (!otherPlayers.TryGetValue(
+            targetId,
+            out targetPlayer))
+        {
+            return;
+        }
+
+        PlayerState state = targetPlayer.GetComponent<PlayerState>();
+
+        if (state != null)
+        {
+            state.SetHp(currentHp);
+            state.PlayHit();
         }
     }
 
