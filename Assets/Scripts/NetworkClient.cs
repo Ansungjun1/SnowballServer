@@ -175,7 +175,10 @@ public class NetworkClient : MonoBehaviour
         {
             if (character != null)
             {
-                character.GetComponent<PlayerMovement>().SetMovePlayer();
+                PlayerState state = character.GetComponent<PlayerState>();
+
+                if(state != null && !state.IsDead)
+                    character.GetComponent<PlayerMovement>().SetMovePlayer();
             }
         }
     }

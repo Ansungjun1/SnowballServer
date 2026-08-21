@@ -96,6 +96,7 @@ namespace SnowballServer
         private ConcurrentDictionary<int, string> clientName = new ConcurrentDictionary<int, string>();
         private ConcurrentDictionary<int, int> lastPositionSequence = new ConcurrentDictionary<int, int>();
         private ConcurrentDictionary<int, int> playerHps = new ConcurrentDictionary<int, int>();
+        private ConcurrentDictionary<int, bool> playerDead = new ConcurrentDictionary<int, bool>();
 
         private Dictionary<int, SnowItemState> snowItems = new Dictionary<int, SnowItemState>();
 
@@ -196,8 +197,6 @@ namespace SnowballServer
                     string token = Guid.NewGuid().ToString("N");
 
                     tokens[token] = clientId;
-
-                    playerHps[clientId] = 3;
 
                     Console.WriteLine($"클라이언트 {clientId} 연결");
 
@@ -462,6 +461,9 @@ namespace SnowballServer
             clientName[clientId] = name;
             clientPositions[clientId] = Vector3.Zero;
 
+            playerHps[clientId] = 3;
+            playerDead[clientId] = false;
+
             BroadcastPlayerInfo(clientId, color, name);
         }
         void HandleChatMessage(byte[] buffer, int clientId)
@@ -564,6 +566,11 @@ namespace SnowballServer
             if (!int.TryParse(parts[1], out int sequence))
                 return;
 
+            if (playerDead.TryGetValue(clientId, out bool isDead) && isDead)
+            {
+                return;
+            }
+
             if (lastPositionSequence.TryGetValue(clientId, out int lastSequence))
             {
                 if (sequence <= lastSequence)
@@ -642,6 +649,11 @@ namespace SnowballServer
 
         void HandleSnowItemRequest(byte[] buffer, int clientId)
         {
+            if (playerDead.TryGetValue(clientId, out bool isDead) && isDead)
+            {
+                return;
+            }
+
             int messageLength = buffer[1];
 
             string data = Encoding.UTF8.GetString(buffer, 2, messageLength);
@@ -748,6 +760,11 @@ namespace SnowballServer
 
         void HandleSnowballThrowRequest(int clientId)
         {
+            if (playerDead.TryGetValue(clientId, out bool isDead) && isDead)
+            {
+                return;
+            }
+
             if (!snowballCounts.TryGetValue(
                 clientId,
                 out int snowballCount))
@@ -924,6 +941,11 @@ namespace SnowballServer
             currentHp--;
 
             playerHps[targetId] = currentHp;
+
+            if (currentHp == 0)
+            {
+                playerDead[targetId] = true;
+            }
 
             BroadcastPlayerHit(
                 targetId,
