@@ -18,9 +18,9 @@ public class PlayerState : MonoBehaviour
     private void Awake()
     {
         movement = GetComponent<PlayerMovement>();
-        MaxHp = 3;
-        CurrentHp = 3;
-        SetHp(3);
+        MaxHp = 5;
+        CurrentHp = MaxHp;
+        SetHp(CurrentHp);
     }
 
     public void SetHp(float hp)
@@ -43,13 +43,25 @@ public class PlayerState : MonoBehaviour
         movement.PlayHit();
     }
 
+    public void ResetDeath()
+    {
+        IsDead = false;
+        movement.PlayThrow();
+    }
+
     private void OnTriggerEnter(Collider other)
     {
         SnowItem snowItem = other.GetComponent<SnowItem>();
 
-        if (snowItem == null)
-            return;
+        if (snowItem != null)
+        {
+            FindObjectOfType<NetworkClient>().RequestSnowItem(snowItem.itemId);
+        }
 
-        FindObjectOfType<NetworkClient>().RequestSnowItem(snowItem.itemId);
+        DroppedSnowItem droppedSnowItem = other.GetComponent<DroppedSnowItem>();
+        if (droppedSnowItem != null)
+        {
+            FindObjectOfType<NetworkClient>().RequestDroppedSnowItem(droppedSnowItem.itemId);
+        }
     }
 }

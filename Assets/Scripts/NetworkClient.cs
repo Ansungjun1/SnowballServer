@@ -23,7 +23,13 @@ enum TcpPacketType : byte
     SnowballThrowRequest = 0x08,
     SnowballSpawn = 0x09,
     SnowballDespawn = 0x0A,
+
     PlayerHit = 0x0B,
+    PlayerRespawn = 0x0C,
+
+    DroppedSnowballs = 0x0D,
+    DroppedSnowItemRequest = 0x0E,
+    DroppedSnowItemResult = 0x0F,
 }
 
 enum UdpPacketType : byte
@@ -48,6 +54,7 @@ public class NetworkClient : MonoBehaviour
     public Transform[] SpawnPos;
 
     private Dictionary<int, SnowItem> snowItems = new Dictionary<int, SnowItem>();
+    private Dictionary<int, DroppedSnowItem> droppedSnowItems = new Dictionary<int, DroppedSnowItem>();
 
     private bool isRunning;
 
@@ -74,6 +81,7 @@ public class NetworkClient : MonoBehaviour
     private float positionSendTimer = 0f;
 
     public GameObject snowballPrefab;
+    public GameObject droppedSnowballPrefab;
 
     private Dictionary<int, GameObject> snowballObjects = new Dictionary<int, GameObject>();
 
@@ -414,9 +422,147 @@ public class NetworkClient : MonoBehaviour
                 HandlePlayerHit(packet);
                 break;
 
+            case (byte)TcpPacketType.PlayerRespawn:
+                HandlePlayerRespawn(packet);
+                break;
+
+            case (byte)TcpPacketType.DroppedSnowballs:
+                HandleDroppedSnowballs(packet);
+                break;
+
+            case (byte)TcpPacketType.DroppedSnowItemResult:
+                HandleDroppedSnowItemResult(packet);
+                break;
+
             default:
                 Debug.Log("¾Ë ¼ö ¾ø´Â ÆÐÅ¶ Å¸ÀÔ:" + packetType);
                 break;
+        }
+    }
+
+    void HandleDroppedSnowballs(byte[] buffer)
+    {
+        int messageLength = buffer[1];
+
+        string data =
+            Encoding.UTF8.GetString(
+                buffer,
+                2,
+                messageLength
+            );
+
+        string[] parts = data.Split(':');
+
+        if (parts.Length != 3)
+            return;
+
+        if (!int.TryParse(parts[0], out int dropSnowId) ||
+            !int.TryParse(parts[2], out int dropSnowCount))
+        {
+            return;
+        }
+
+        string[] positionParts = parts[1].Split(',');
+
+        if (positionParts.Length != 2)
+            return;
+
+        if (!float.TryParse(positionParts[0], out float posX) ||
+            !float.TryParse(positionParts[1], out float posZ))
+        {
+            return;
+        }
+
+
+        Vector3 spawnPosition = new Vector3(posX, 3f, posZ);
+
+        UnityMainThreadDispatcher.Enqueue(() =>
+        {
+            AddDroppedSnowballsRespawn(
+                dropSnowId,
+                spawnPosition,
+                dropSnowCount
+            );
+        });
+    }
+
+    void AddDroppedSnowballsRespawn(int id, Vector3 position, int count)
+    {
+        GameObject droppedSnowItem = Instantiate(droppedSnowballPrefab, position, Quaternion.identity);
+        DroppedSnowItem item = droppedSnowItem.GetComponent<DroppedSnowItem>();
+
+        item.itemId = id;
+        item.itemCount = count;
+
+        droppedSnowItems[id] = item;
+    }
+
+    void HandlePlayerRespawn(byte[] buffer)
+    {
+        int messageLength = buffer[1];
+
+        string data =
+            Encoding.UTF8.GetString(
+                buffer,
+                2,
+                messageLength
+            );
+
+        string[] parts = data.Split(':');
+
+        if (parts.Length != 3)
+            return;
+
+        if (!int.TryParse(parts[0], out int targetId) ||
+            !int.TryParse(parts[2], out int currentHp))
+        {
+            return;
+        }
+
+        string[] positionParts = parts[1].Split(',');
+
+        if (!float.TryParse(positionParts[0], out float posX) ||
+            !float.TryParse(positionParts[1], out float posY) ||
+            !float.TryParse(positionParts[2], out float posZ))
+        {
+            return;
+        }
+
+        Vector3 spawnPosition = new Vector3(posX, posY, posZ);
+
+        UnityMainThreadDispatcher.Enqueue(() =>
+        {
+            ApplyPlayerRespawn(
+                targetId,
+                spawnPosition,
+                currentHp
+            );
+        });
+    }
+
+    void ApplyPlayerRespawn(int targetId, Vector3 spawnPosition, int currentHp)
+    {
+        GameObject targetPlayer;
+
+        if (targetId == clientId)
+        {
+            targetPlayer = character;
+        }
+        else if (!otherPlayers.TryGetValue(
+            targetId,
+            out targetPlayer))
+        {
+            return;
+        }
+
+        targetPlayer.transform.position = spawnPosition;
+
+        PlayerState state = targetPlayer.GetComponent<PlayerState>();
+
+        if (state != null)
+        {
+            state.SetHp(currentHp);
+            state.ResetDeath();
         }
     }
 
@@ -516,6 +662,43 @@ public class NetworkClient : MonoBehaviour
         snowballObjects.Remove(snowballId);
     }
 
+    void HandleDroppedSnowItemResult(byte[] buffer)
+    {
+        int messageLength = buffer[1];
+
+        string data =
+            Encoding.UTF8.GetString(buffer, 2, messageLength);
+
+        string[] parts = data.Split(':');
+
+        if (parts.Length != 3)
+            return;
+
+        if (!int.TryParse(parts[0], out int itemId) ||
+            !int.TryParse(parts[1], out int clientId) ||
+            !int.TryParse(parts[2], out int snowballCount))
+        {
+            return;
+        }
+
+        UnityMainThreadDispatcher.Enqueue(() =>
+        {
+            if (droppedSnowItems.TryGetValue(itemId, out DroppedSnowItem item))
+            {
+                droppedSnowItems.Remove(itemId);
+                Destroy(item.gameObject);
+            }
+
+            if (clientId == this.clientId)
+            {
+                mySnowballCount = snowballCount;
+
+                Debug.Log(
+                    $"´«µ¢ÀÌ È¹µæ! ÇöÀç °³¼ö: {mySnowballCount}"
+                );
+            }
+        });
+    }
     void HandleSnowItemResult(byte[] buffer)
     {
         int messageLength = buffer[1];
@@ -793,6 +976,20 @@ public class NetworkClient : MonoBehaviour
         stream.Write(packet, 0, packet.Length);
 
         Debug.Log($"SnowItem È¹µæ ¿äÃ»: {itemId}");
+    }
+
+    public void RequestDroppedSnowItem(int itemId)
+    {
+        byte[] data = Encoding.UTF8.GetBytes(itemId.ToString());
+
+        byte[] packet = new byte[data.Length + 2];
+
+        packet[0] = (byte)TcpPacketType.DroppedSnowItemRequest;
+        packet[1] = (byte)data.Length;
+
+        Array.Copy(data, 0, packet, 2, data.Length);
+
+        stream.Write(packet, 0, packet.Length);
     }
 
     public void RequestThrowSnowball()

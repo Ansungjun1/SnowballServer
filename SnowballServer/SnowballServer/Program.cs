@@ -40,6 +40,12 @@ namespace SnowballServer
         }
     }
 
+    class DroppedSnowballState
+    {
+        public int Id;
+        public Vector3 Position;
+        public int Count;
+    }
 
     class SnowballState
     {
@@ -74,7 +80,13 @@ namespace SnowballServer
         SnowballThrowRequest = 0x08,
         SnowballSpawn = 0x09,
         SnowballDespawn = 0x0A,
+
         PlayerHit = 0x0B,
+        PlayerRespawn = 0x0C,
+
+        DroppedSnowballs = 0x0D,
+        DroppedSnowItemRequest = 0x0E,
+        DroppedSnowItemResult = 0x0F,
     }
 
     enum UdpPacketType : byte
@@ -97,15 +109,15 @@ namespace SnowballServer
         private ConcurrentDictionary<int, int> lastPositionSequence = new ConcurrentDictionary<int, int>();
         private ConcurrentDictionary<int, int> playerHps = new ConcurrentDictionary<int, int>();
         private ConcurrentDictionary<int, bool> playerDead = new ConcurrentDictionary<int, bool>();
+        private Dictionary<int, Vector3> playerSpawnPositions = new Dictionary<int, Vector3>();
 
         private Dictionary<int, SnowItemState> snowItems = new Dictionary<int, SnowItemState>();
-
         private ConcurrentDictionary<int, int> snowballCounts = new ConcurrentDictionary<int, int>();
-
         private ConcurrentDictionary<int, SnowballState> snowballs = new ConcurrentDictionary<int, SnowballState>();
+        ConcurrentDictionary<int, DroppedSnowballState> droppedSnowballs = new ConcurrentDictionary<int, DroppedSnowballState>();
 
         private int nextSnowballId = 0;
-
+        private int nextDropSnowballId = 0;
         private int nextClientId = 0;
 
         public async Task StartGameLoop()
@@ -410,6 +422,10 @@ namespace SnowballServer
                     HandleSnowballThrowRequest(clientId);
                     break;
 
+                case (byte)TcpPacketType.DroppedSnowItemRequest:
+                    HandleDroppedSnowItemRequest(packet, clientId);
+                    break;
+
                 default:
                     Console.WriteLine("알 수 없는 TCP 패킷 타입: " + packetType);
                     break;
@@ -459,10 +475,12 @@ namespace SnowballServer
             tcpClients[clientId] = tcpClient;
             clientColor[clientId] = color;
             clientName[clientId] = name;
-            clientPositions[clientId] = Vector3.Zero;
+            clientPositions[clientId] = new Vector3(0, 5, 0);
 
-            playerHps[clientId] = 3;
+            playerHps[clientId] = 5;
             playerDead[clientId] = false;
+
+            playerSpawnPositions[clientId] = clientPositions[clientId];
 
             BroadcastPlayerInfo(clientId, color, name);
         }
@@ -611,7 +629,7 @@ namespace SnowballServer
 
         void BroadcastPositionToClients(int senderID, int sequence, bool isMoving)
         {
-            string position = 
+            string position =
                 $"{senderID}:{sequence}:" +
                 $"{clientPositions[senderID].X}," +
                 $"{clientPositions[senderID].Y}," +
@@ -644,6 +662,81 @@ namespace SnowballServer
                     }
 
                 }
+            }
+        }
+
+        void HandleDroppedSnowItemRequest(byte[] buffer, int clientId)
+        {
+            if (playerDead.TryGetValue(clientId, out bool isDead) && isDead)
+            {
+                return;
+            }
+
+            int messageLength = buffer[1];
+
+            string data = Encoding.UTF8.GetString(buffer, 2, messageLength);
+
+            if (!int.TryParse(data, out int itemId))
+            {
+                return;
+            }
+
+            if (!droppedSnowballs.TryGetValue(itemId, out DroppedSnowballState item))
+                return;
+
+            if (!clientPositions.TryGetValue(
+                clientId,
+                out Vector3 playerPosition))
+                return;
+
+            float dx = item.Position.X - playerPosition.X;
+
+            float dz = item.Position.Z - playerPosition.Z;
+
+            float distance = MathF.Sqrt(dx * dx + dz * dz);
+
+            if (distance > 2f)
+                return;
+
+            if (!droppedSnowballs.TryRemove(itemId, out item))
+                return;
+
+            int newCount = snowballCounts.AddOrUpdate(
+                clientId,
+                item.Count,
+                (_, current) => current + item.Count);
+
+            Console.WriteLine(
+                $"Client {clientId} DroppedSnowItem {itemId}, {item.Count} 획득 / Snowball {newCount}"
+            );
+
+            BroadcastDroppedSnowItemResult(
+                itemId,
+                clientId,
+                newCount);
+        }
+
+        void BroadcastDroppedSnowItemResult(int itemId, int clientId, int snowballCount)
+        {
+            string payload =
+                $"{itemId}:{clientId}:{snowballCount}";
+
+            byte[] data = Encoding.UTF8.GetBytes(payload);
+
+            byte[] packet = new byte[data.Length + 2];
+
+            packet[0] = (byte)TcpPacketType.DroppedSnowItemResult;
+            packet[1] = (byte)data.Length;
+
+            Array.Copy(data, 0, packet, 2, data.Length);
+
+            foreach (var client in tcpClients)
+            {
+                if (!client.Value.Connected)
+                    continue;
+
+                NetworkStream stream = client.Value.GetStream();
+                stream.Write(packet, 0, packet.Length);
             }
         }
 
@@ -945,6 +1038,35 @@ namespace SnowballServer
             if (currentHp == 0)
             {
                 playerDead[targetId] = true;
+
+                if (snowballCounts.TryGetValue(targetId, out int snowballCount))
+                {
+                    int dropCount = snowballCount / 2;
+
+                    if (dropCount > 0)
+                    {
+                        int dropId = ++nextDropSnowballId;
+
+                        DroppedSnowballState drop = new DroppedSnowballState
+                        {
+                            Id = dropId,
+                            Position = clientPositions[targetId],
+                            Count = dropCount
+                        };
+
+                        droppedSnowballs[dropId] = drop;
+
+                        BroadcastDroppedSnowballs(
+                            drop.Id,
+                            drop.Position,
+                            drop.Count
+                        );
+                    }
+
+                    snowballCounts[targetId] = 0;
+                }
+
+                _ = RespawnPlayer(targetId);
             }
 
             BroadcastPlayerHit(
@@ -952,6 +1074,116 @@ namespace SnowballServer
                 attackerId,
                 currentHp
             );
+        }
+
+        void BroadcastDroppedSnowballs(int id, Vector3 position, int count)
+        {
+            string payload =
+                $"{id}:" +
+                $"{position.X}," +
+                $"{position.Z}:" +
+                $"{count}";
+
+            byte[] data =
+                Encoding.UTF8.GetBytes(payload);
+
+            byte[] packet =
+                new byte[data.Length + 2];
+
+            packet[0] =
+                (byte)TcpPacketType.DroppedSnowballs;
+
+            packet[1] =
+                (byte)data.Length;
+
+            Array.Copy(
+                data,
+                0,
+                packet,
+                2,
+                data.Length
+            );
+
+            foreach (var client in tcpClients)
+            {
+                if (!client.Value.Connected)
+                    continue;
+
+                NetworkStream stream =
+                    client.Value.GetStream();
+
+                stream.Write(
+                    packet,
+                    0,
+                    packet.Length
+                );
+            }
+        }
+        async Task RespawnPlayer(int clientId)
+        {
+            await Task.Delay(3000);
+
+            if (!playerSpawnPositions.TryGetValue(
+                clientId,
+                out Vector3 spawnPosition))
+            {
+                return;
+            }
+
+            playerHps[clientId] = 5;
+            playerDead[clientId] = false;
+            clientPositions[clientId] = spawnPosition;
+
+            BroadcastPlayerRespawn(
+                clientId,
+                spawnPosition,
+                5
+            );
+        }
+
+        void BroadcastPlayerRespawn(int targetId, Vector3 spawnPosition, int currentHp)
+        {
+            string payload =
+                $"{targetId}:" +
+                $"{spawnPosition.X}," +
+                $"{spawnPosition.Y}," +
+                $"{spawnPosition.Z}:" +
+                $"{currentHp}";
+
+            byte[] data =
+                Encoding.UTF8.GetBytes(payload);
+
+            byte[] packet =
+                new byte[data.Length + 2];
+
+            packet[0] =
+                (byte)TcpPacketType.PlayerRespawn;
+
+            packet[1] =
+                (byte)data.Length;
+
+            Array.Copy(
+                data,
+                0,
+                packet,
+                2,
+                data.Length
+            );
+
+            foreach (var client in tcpClients)
+            {
+                if (!client.Value.Connected)
+                    continue;
+
+                NetworkStream stream =
+                    client.Value.GetStream();
+
+                stream.Write(
+                    packet,
+                    0,
+                    packet.Length
+                );
+            }
         }
 
         void BroadcastPlayerHit(

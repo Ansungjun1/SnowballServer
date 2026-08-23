@@ -15693,15 +15693,15 @@ RectTransform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 212046234}
   m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
-  m_LocalPosition: {x: 0, y: 0, z: 0.77789307}
+  m_LocalPosition: {x: 0, y: 0, z: 80.83}
   m_LocalScale: {x: 0.031509846, y: 0.031509846, z: 0.031509846}
   m_ConstrainProportionsScale: 0
   m_Children: []
-  m_Father: {fileID: 424474735}
+  m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0.5, y: 0.5}
   m_AnchorMax: {x: 0.5, y: 0.5}
-  m_AnchoredPosition: {x: 9.872925, y: 15.556152}
+  m_AnchoredPosition: {x: -349.6833, y: 134.16144}
   m_SizeDelta: {x: 100, y: 100}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!114 &212046236
@@ -15740,6 +15740,7 @@ MonoBehaviour:
   - {fileID: 4995984005901685041}
   - {fileID: 8890883349766046988}
   snowballPrefab: {fileID: 6943339506522990612, guid: d0cbc48d73ce2f44e82780455b0a1dc1, type: 3}
+  droppedSnowballPrefab: {fileID: 6681521896632476967, guid: 44c3ef8d17e465d45b20b3cdd4dd5243, type: 3}
 --- !u!1001 &212897374
 PrefabInstance:
   m_ObjectHideFlags: 0
@@ -21524,54 +21525,6 @@ Transform:
   m_CorrespondingSourceObject: {fileID: 7704230294317199144, guid: 8aed630d56eaeab4ab7a316df2403d39, type: 3}
   m_PrefabInstance: {fileID: 318298893}
   m_PrefabAsset: {fileID: 0}
---- !u!1 &318797144
-GameObject:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  serializedVersion: 6
-  m_Component:
-  - component: {fileID: 318797145}
-  - component: {fileID: 318797146}
-  m_Layer: 5
-  m_Name: Server
-  m_TagString: Untagged
-  m_Icon: {fileID: 0}
-  m_NavMeshLayer: 0
-  m_StaticEditorFlags: 0
-  m_IsActive: 1
---- !u!224 &318797145
-RectTransform:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 318797144}
-  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
-  m_LocalPosition: {x: 0, y: 0, z: 0.77789307}
-  m_LocalScale: {x: 0.031509846, y: 0.031509846, z: 0.031509846}
-  m_ConstrainProportionsScale: 0
-  m_Children: []
-  m_Father: {fileID: 424474735}
-  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
-  m_AnchorMin: {x: 0.5, y: 0.5}
-  m_AnchorMax: {x: 0.5, y: 0.5}
-  m_AnchoredPosition: {x: 18.979614, y: -5.57724}
-  m_SizeDelta: {x: 100, y: 100}
-  m_Pivot: {x: 0.5, y: 0.5}
---- !u!114 &318797146
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 318797144}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: f83270f6a0e46184f9f9105b0b02ad5c, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
 --- !u!1001 &320005998
 PrefabInstance:
   m_ObjectHideFlags: 0
@@ -36878,39 +36831,6 @@ Transform:
   m_CorrespondingSourceObject: {fileID: 9222669900695754139, guid: 9308b96840946334fb794af2310c2571, type: 3}
   m_PrefabInstance: {fileID: 424319240}
   m_PrefabAsset: {fileID: 0}
---- !u!1 &424474734
-GameObject:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  serializedVersion: 6
-  m_Component:
-  - component: {fileID: 424474735}
-  m_Layer: 0
-  m_Name: Object
-  m_TagString: Untagged
-  m_Icon: {fileID: 0}
-  m_NavMeshLayer: 0
-  m_StaticEditorFlags: 0
-  m_IsActive: 1
---- !u!4 &424474735
-Transform:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 424474734}
-  serializedVersion: 2
-  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: -11.32956, y: 3.7372336, z: 80.05211}
-  m_LocalScale: {x: 1, y: 1, z: 1}
-  m_ConstrainProportionsScale: 0
-  m_Children:
-  - {fileID: 318797145}
-  - {fileID: 212046235}
-  m_Father: {fileID: 0}
-  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1001 &425524815
 PrefabInstance:
   m_ObjectHideFlags: 0
@@ -90273,7 +90193,7 @@ MonoBehaviour:
   m_OnClick:
     m_PersistentCalls:
       m_Calls:
-      - m_Target: {fileID: 318797146}
+      - m_Target: {fileID: 0}
         m_TargetAssemblyTypeName: NetworkServer, Assembly-CSharp
         m_MethodName: Connect
         m_Mode: 1
@@ -284105,7 +284025,7 @@ SceneRoots:
   - {fileID: 10828013}
   - {fileID: 154820488}
   - {fileID: 913573990}
-  - {fileID: 424474735}
+  - {fileID: 212046235}
   - {fileID: 5759057163818802575}
   - {fileID: 1868804002}
   - {fileID: 1432685842}
