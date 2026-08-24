@@ -4,7 +4,7 @@ using UnityEngine;
 
 public class SnowItem : MonoBehaviour
 {
-    public int itemId;
+    public int ownerId;
 
     [SerializeField]
     private float rotateSpeed = 50f;

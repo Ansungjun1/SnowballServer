@@ -11,8 +11,8 @@ GameObject:
   - component: {fileID: 9222669900695754139}
   - component: {fileID: 4595711477452839231}
   - component: {fileID: 4946690064455286245}
-  - component: {fileID: 1513898264103409059}
   - component: {fileID: 2759017511507731855}
+  - component: {fileID: 1513898264103409059}
   m_Layer: 0
   m_Name: SnowItem
   m_TagString: Untagged
@@ -85,20 +85,6 @@ MeshRenderer:
   m_SortingLayer: 0
   m_SortingOrder: 0
   m_AdditionalVertexStreams: {fileID: 0}
---- !u!114 &1513898264103409059
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 6681521896632476967}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 536bd741548582844b9326ac45b926ec, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
-  itemId: 0
-  rotateSpeed: 50
 --- !u!65 &2759017511507731855
 BoxCollider:
   m_ObjectHideFlags: 0
@@ -120,3 +106,17 @@ BoxCollider:
   serializedVersion: 3
   m_Size: {x: 0.17324173, y: 0.051512707, z: 0.17324178}
   m_Center: {x: 0, y: 0.038723756, z: 0.000000007450582}
+--- !u!114 &1513898264103409059
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6681521896632476967}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 536bd741548582844b9326ac45b926ec, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  itemId: 0
+  rotateSpeed: 50

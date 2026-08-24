@@ -40,6 +40,18 @@ namespace SnowballServer
         }
     }
 
+    class SnowFieldState
+    {
+        public int OwnerClientId;
+
+        public Vector3 CurrentSnowPosition;
+
+        public int MinX;
+        public int MaxX;
+
+        public int MinZ;
+        public int MaxZ;
+    }
     class DroppedSnowballState
     {
         public int Id;
@@ -60,13 +72,6 @@ namespace SnowballServer
         public float LifeTime;
     }
 
-    class SnowItemState
-    {
-        public int Id;
-        public Vector3 Position;
-        public bool IsActive;
-    }
-
     enum TcpPacketType : byte
     {
         Chat = 0x01,
@@ -76,7 +81,7 @@ namespace SnowballServer
 
         SnowItemRequest = 0x05,
         SnowItemResult = 0x06,
-        SnowItemRespawn = 0x07,
+        //SnowItemRespawn = 0x07,
         SnowballThrowRequest = 0x08,
         SnowballSpawn = 0x09,
         SnowballDespawn = 0x0A,
@@ -87,6 +92,8 @@ namespace SnowballServer
         DroppedSnowballs = 0x0D,
         DroppedSnowItemRequest = 0x0E,
         DroppedSnowItemResult = 0x0F,
+
+        SnowFieldJoin = 0x10,
     }
 
     enum UdpPacketType : byte
@@ -111,14 +118,16 @@ namespace SnowballServer
         private ConcurrentDictionary<int, bool> playerDead = new ConcurrentDictionary<int, bool>();
         private Dictionary<int, Vector3> playerSpawnPositions = new Dictionary<int, Vector3>();
 
-        private Dictionary<int, SnowItemState> snowItems = new Dictionary<int, SnowItemState>();
         private ConcurrentDictionary<int, int> snowballCounts = new ConcurrentDictionary<int, int>();
         private ConcurrentDictionary<int, SnowballState> snowballs = new ConcurrentDictionary<int, SnowballState>();
+        private ConcurrentDictionary<int, SnowFieldState> snowFields = new ConcurrentDictionary<int, SnowFieldState>();
         ConcurrentDictionary<int, DroppedSnowballState> droppedSnowballs = new ConcurrentDictionary<int, DroppedSnowballState>();
 
         private int nextSnowballId = 0;
         private int nextDropSnowballId = 0;
         private int nextClientId = 0;
+
+        private readonly Random random = new Random();
 
         public async Task StartGameLoop()
         {
@@ -142,7 +151,7 @@ namespace SnowballServer
             // UDP 시작
             StartUdpServer(9051);
 
-            InitializeSnowItems();
+            InitializeSnowField();
         }
 
         void StartTcpServer(int port)
@@ -164,36 +173,50 @@ namespace SnowballServer
             //ThreadPool.QueueUserWorkItem(ListenForUdpRequests);
             _ = ListenForUdpRequests();
         }
-        void InitializeSnowItems()
+        void InitializeSnowField()
         {
-            snowItems[0] = new SnowItemState
+            snowFields[0] = new SnowFieldState
             {
-                Id = 0,
-                Position = new Vector3(28f, 3f, -14f),
-                IsActive = true
-            };
+                OwnerClientId = -1,
 
-            snowItems[1] = new SnowItemState
-            {
-                Id = 1,
-                Position = new Vector3(-5f, 3f, -6f),
-                IsActive = true
-            };
+                MinX = 1,
+                MaxX = 5,
 
-            snowItems[2] = new SnowItemState
-            {
-                Id = 2,
-                Position = new Vector3(6f, 3f, -18f),
-                IsActive = true
+                MinZ = 1,
+                MaxZ = 5,
             };
-
-            snowItems[3] = new SnowItemState
+            snowFields[1] = new SnowFieldState
             {
-                Id = 3,
-                Position = new Vector3(8f, 3f, 7f),
-                IsActive = true
+                OwnerClientId = -1,
+
+                MinX = 6,
+                MaxX = 10,
+
+                MinZ = 6,
+                MaxZ = 10,
+            };
+            snowFields[2] = new SnowFieldState
+            {
+                OwnerClientId = -1,
+
+                MinX = -5,
+                MaxX = -1,
+
+                MinZ = -5,
+                MaxZ = -1,
+            };
+            snowFields[3] = new SnowFieldState
+            {
+                OwnerClientId = -1,
+
+                MinX = -10,
+                MaxX = -6,
+
+                MinZ = -10,
+                MaxZ = -6,
             };
         }
+
         async Task ListenForTcpClients()
         {
             Console.WriteLine("TCP 서버 대기 중..");
@@ -315,6 +338,14 @@ namespace SnowballServer
             clientColor.TryRemove(clientId, out _);
             clientName.TryRemove(clientId, out _);
             clientPositions.TryRemove(clientId, out _);
+
+            foreach(var snowField in snowFields)
+            {
+                if(snowField.Value.OwnerClientId == clientId)
+                {
+                    snowField.Value.OwnerClientId = -1;
+                }
+            }
 
             string tokenToRemove = null;
 
@@ -482,8 +513,81 @@ namespace SnowballServer
 
             playerSpawnPositions[clientId] = clientPositions[clientId];
 
+            foreach(var snowField in snowFields)
+            {
+                if(snowField.Value.OwnerClientId == -1)
+                {
+                    snowField.Value.OwnerClientId = clientId;
+
+                    int posX = random.Next(snowField.Value.MinX, snowField.Value.MaxX);
+                    int posZ = random.Next(snowField.Value.MinZ, snowField.Value.MaxZ);
+
+                    snowField.Value.CurrentSnowPosition = new Vector3(posX, 3, posZ);
+
+                    BroadcastSnowFieldInfo(clientId, snowField.Value.CurrentSnowPosition);
+                    break;
+                }
+            }
+
+            foreach (var field in snowFields.Values)
+            {
+                if (field.OwnerClientId == -1 || field.OwnerClientId == clientId)
+                    continue;
+
+                SendSnowFieldToClient(
+                    tcpClient,
+                    field.OwnerClientId,
+                    field.CurrentSnowPosition
+                );
+            }
+
             BroadcastPlayerInfo(clientId, color, name);
         }
+        void SendSnowFieldToClient(TcpClient tcpClient, int onwerId, Vector3 pos)
+        {
+            byte[] data = Encoding.UTF8.GetBytes(
+                $"{onwerId}:" +
+                $"{pos.X}," +
+                $"{pos.Y}," +
+                $"{pos.Z}");
+
+            byte[] packet = new byte[data.Length + 2];
+
+            packet[0] = (byte)TcpPacketType.SnowFieldJoin;
+            packet[1] = (byte)data.Length;
+            Array.Copy(data, 0, packet, 2, data.Length);
+
+            if (tcpClient.Connected)
+            {
+                NetworkStream stream = tcpClient.GetStream();
+                stream.Write(packet, 0, packet.Length);
+            }
+        }
+
+        void BroadcastSnowFieldInfo(int senderID, Vector3 pos)
+        {
+            byte[] data = Encoding.UTF8.GetBytes(
+                $"{senderID}:" +
+                $"{pos.X}," +
+                $"{pos.Y}," +
+                $"{pos.Z}");
+
+            byte[] packet = new byte[data.Length + 2];
+
+            packet[0] = (byte)TcpPacketType.SnowFieldJoin;
+            packet[1] = (byte)data.Length;
+            Array.Copy(data, 0, packet, 2, data.Length);
+
+            foreach (var client in tcpClients)//새로운 클라이언트를 이미 접속한 모든 클라이언트에 전송
+            {
+                if (client.Value.Connected)
+                {
+                    NetworkStream stream = client.Value.GetStream();
+                    stream.Write(packet, 0, packet.Length);
+                }
+            }
+        }
+
         void HandleChatMessage(byte[] buffer, int clientId)
         {
             byte messageLength = buffer[1];
@@ -747,17 +851,18 @@ namespace SnowballServer
                 return;
             }
 
-            int messageLength = buffer[1];
+            SnowFieldState playerField = null;
 
-            string data = Encoding.UTF8.GetString(buffer, 2, messageLength);
+            foreach (var field in snowFields.Values)
+            {
+                if (field.OwnerClientId == clientId)
+                {
+                    playerField = field;
+                    break;
+                }
+            }
 
-            if (!int.TryParse(data, out int itemId))
-                return;
-
-            if (!snowItems.TryGetValue(itemId, out SnowItemState item))
-                return;
-
-            if (!item.IsActive)
+            if (playerField == null)
                 return;
 
             if (!clientPositions.TryGetValue(
@@ -765,78 +870,54 @@ namespace SnowballServer
                 out Vector3 playerPosition))
                 return;
 
-            float distance =
-                Vector3.Distance(playerPosition, item.Position);
+            float dx = playerField.CurrentSnowPosition.X - playerPosition.X;
+
+            float dz = playerField.CurrentSnowPosition.Z - playerPosition.Z;
+
+            float distance = MathF.Sqrt(dx * dx + dz * dz);
 
             if (distance > 2f)
                 return;
-
-            item.IsActive = false;
 
             int newCount = snowballCounts.AddOrUpdate(
                 clientId,
                 1,
                 (_, current) => current + 1);
 
+            int posX = random.Next(playerField.MinX, playerField.MaxX);
+
+            int posZ = random.Next(playerField.MinZ, playerField.MaxZ);
+
+            playerField.CurrentSnowPosition = new Vector3(posX, 3f, posZ);
+
+
             Console.WriteLine(
-        $"Client {clientId} SnowItem {itemId} 획득 / Snowball {newCount}"
+        $"Client {clientId} SnowFieldItem 획득 / Snowball {newCount}"
     );
 
             BroadcastSnowItemResult(
-                itemId,
                 clientId,
-                newCount);
-
-            _ = RespawnSnowItem(itemId);
+                newCount,
+                playerField.CurrentSnowPosition);
         }
 
         void BroadcastSnowItemResult(
-            int itemId,
             int winnerClientId,
-            int snowballCount)
+            int snowballCount,
+            Vector3 pos)
         {
             string payload =
-                $"{itemId}:{winnerClientId}:{snowballCount}";
+                $"{winnerClientId}:" +
+                $"{snowballCount}:" +
+                $"{pos.X}," +
+                $"{pos.Y}," +
+                $"{pos.Z}";
 
             byte[] data = Encoding.UTF8.GetBytes(payload);
 
             byte[] packet = new byte[data.Length + 2];
 
             packet[0] = (byte)TcpPacketType.SnowItemResult;
-            packet[1] = (byte)data.Length;
-
-            Array.Copy(data, 0, packet, 2, data.Length);
-
-            foreach (var client in tcpClients)
-            {
-                if (!client.Value.Connected)
-                    continue;
-
-                NetworkStream stream = client.Value.GetStream();
-                stream.Write(packet, 0, packet.Length);
-            }
-        }
-
-        async Task RespawnSnowItem(int itemId)
-        {
-            await Task.Delay(5000);
-
-            if (!snowItems.TryGetValue(itemId, out SnowItemState item))
-                return;
-
-            item.IsActive = true;
-
-            BroadcastSnowItemRespawn(itemId);
-        }
-
-        void BroadcastSnowItemRespawn(int itemId)
-        {
-            byte[] data =
-                Encoding.UTF8.GetBytes(itemId.ToString());
-
-            byte[] packet = new byte[data.Length + 2];
-
-            packet[0] = (byte)TcpPacketType.SnowItemRespawn;
             packet[1] = (byte)data.Length;
 
             Array.Copy(data, 0, packet, 2, data.Length);

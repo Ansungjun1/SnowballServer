@@ -19,7 +19,7 @@ enum TcpPacketType : byte
 
     SnowItemRequest = 0x05,
     SnowItemResult = 0x06,
-    SnowItemRespawn = 0x07,
+    //SnowItemRespawn = 0x07,
     SnowballThrowRequest = 0x08,
     SnowballSpawn = 0x09,
     SnowballDespawn = 0x0A,
@@ -30,6 +30,8 @@ enum TcpPacketType : byte
     DroppedSnowballs = 0x0D,
     DroppedSnowItemRequest = 0x0E,
     DroppedSnowItemResult = 0x0F,
+
+    SnowFieldJoin = 0x10,
 }
 
 enum UdpPacketType : byte
@@ -53,7 +55,6 @@ public class NetworkClient : MonoBehaviour
     public TMP_InputField input_Chat_text;
     public Transform[] SpawnPos;
 
-    private Dictionary<int, SnowItem> snowItems = new Dictionary<int, SnowItem>();
     private Dictionary<int, DroppedSnowItem> droppedSnowItems = new Dictionary<int, DroppedSnowItem>();
 
     private bool isRunning;
@@ -81,9 +82,12 @@ public class NetworkClient : MonoBehaviour
     private float positionSendTimer = 0f;
 
     public GameObject snowballPrefab;
-    public GameObject droppedSnowballPrefab;
+    public GameObject droppedSnowItemPrefab;
+    public GameObject snowItemPrefab;
 
     private Dictionary<int, GameObject> snowballObjects = new Dictionary<int, GameObject>();
+
+    private Dictionary<int, GameObject> snowFieldItems = new Dictionary<int, GameObject>();
 
     private void Start()
     {
@@ -96,8 +100,6 @@ public class NetworkClient : MonoBehaviour
 
         ConnectToServer(ServerIP, tcpPort);
         ConnectToUdpServer(ServerIP, udpPort);
-
-        RegisterSnowItems();
     }
 
     void ConnectToServer(string serverIP, int port)
@@ -117,15 +119,6 @@ public class NetworkClient : MonoBehaviour
         Debug.Log("UDP¼­¹ö ¿¬°á");
 
         _ = ListenForUdpMessage();
-    }
-    void RegisterSnowItems()
-    {
-        SnowItem[] items = FindObjectsOfType<SnowItem>();
-
-        foreach (SnowItem item in items)
-        {
-            snowItems[item.itemId] = item;
-        }
     }
     private void Update()
     {
@@ -406,10 +399,6 @@ public class NetworkClient : MonoBehaviour
                 HandleSnowItemResult(packet);
                 break;
 
-            case (byte)TcpPacketType.SnowItemRespawn:
-                HandleSnowItemRespawn(packet);
-                break;
-
             case (byte)TcpPacketType.SnowballSpawn:
                 HandleSnowballSpawn(packet);
                 break;
@@ -434,10 +423,80 @@ public class NetworkClient : MonoBehaviour
                 HandleDroppedSnowItemResult(packet);
                 break;
 
+            case (byte)TcpPacketType.SnowFieldJoin:
+                HandleFieldFromServer(packet);
+                break;
+
             default:
                 Debug.Log("¾Ë ¼ö ¾ø´Â ÆÐÅ¶ Å¸ÀÔ:" + packetType);
                 break;
         }
+    }
+
+    void HandleFieldFromServer(byte[] buffer)
+    {
+        int messageLength = buffer[1];
+
+        string data =
+            Encoding.UTF8.GetString(
+                buffer,
+                2,
+                messageLength
+            );
+
+        string[] parts = data.Split(':');
+
+        if (parts.Length != 2)
+            return;
+
+        if (!int.TryParse(parts[0], out int ownerId))
+        {
+            return;
+        }
+
+        string[] positionParts = parts[1].Split(',');
+
+        if (positionParts.Length != 3)
+            return;
+
+        if (!float.TryParse(positionParts[0], out float posX) ||
+            !float.TryParse(positionParts[1], out float posY) ||
+            !float.TryParse(positionParts[2], out float posZ))
+        {
+            return;
+        }
+
+
+        Vector3 spawnPosition = new Vector3(posX, posY, posZ);
+
+        UnityMainThreadDispatcher.Enqueue(() =>
+        {
+            SnowFieldInfo(
+                ownerId,
+                spawnPosition
+            );
+        });
+    }
+    
+    void SnowFieldInfo(int ownerId, Vector3 pos)
+    {
+        if (snowFieldItems.TryGetValue(
+        ownerId,
+        out GameObject existingItem))
+        {
+            existingItem.transform.position = pos;
+            return;
+        }
+
+        GameObject snowItem =
+            Instantiate(
+                snowItemPrefab,
+                pos,
+                Quaternion.Euler(-90, 0, 0));
+
+        snowItem.GetComponent<SnowItem>().ownerId = ownerId;
+
+        snowFieldItems[ownerId] = snowItem;
     }
 
     void HandleDroppedSnowballs(byte[] buffer)
@@ -488,7 +547,7 @@ public class NetworkClient : MonoBehaviour
 
     void AddDroppedSnowballsRespawn(int id, Vector3 position, int count)
     {
-        GameObject droppedSnowItem = Instantiate(droppedSnowballPrefab, position, Quaternion.identity);
+        GameObject droppedSnowItem = Instantiate(droppedSnowItemPrefab, position, Quaternion.Euler(-90, 0 ,0));
         DroppedSnowItem item = droppedSnowItem.GetComponent<DroppedSnowItem>();
 
         item.itemId = id;
@@ -711,46 +770,35 @@ public class NetworkClient : MonoBehaviour
         if (parts.Length != 3)
             return;
 
-        if (!int.TryParse(parts[0], out int itemId) ||
-            !int.TryParse(parts[1], out int winnerClientId) ||
-            !int.TryParse(parts[2], out int snowballCount))
+        if (!int.TryParse(parts[0], out int ownerId) ||
+            !int.TryParse(parts[1], out int snowballCount))
+        {
+            return;
+        }
+
+        string[] positionParts = parts[2].Split(',');
+
+        if (positionParts.Length != 3)
+            return;
+
+        if (!float.TryParse(positionParts[0], out float x) ||
+            !float.TryParse(positionParts[1], out float y) ||
+            !float.TryParse(positionParts[2], out float z))
         {
             return;
         }
 
         UnityMainThreadDispatcher.Enqueue(() =>
         {
-            if (snowItems.TryGetValue(itemId, out SnowItem item))
-            {
-                item.gameObject.SetActive(false);
-            }
-
-            if (winnerClientId == clientId)
+            if (ownerId == clientId)
             {
                 mySnowballCount = snowballCount;
+
+                SnowFieldInfo(ownerId, new Vector3(x, y, z));
 
                 Debug.Log(
                     $"´«µ¢ÀÌ È¹µæ! ÇöÀç °³¼ö: {mySnowballCount}"
                 );
-            }
-        });
-    }
-
-    void HandleSnowItemRespawn(byte[] buffer)
-    {
-        int messageLength = buffer[1];
-
-        string data =
-            Encoding.UTF8.GetString(buffer, 2, messageLength);
-
-        if (!int.TryParse(data, out int itemId))
-            return;
-
-        UnityMainThreadDispatcher.Enqueue(() =>
-        {
-            if (snowItems.TryGetValue(itemId, out SnowItem item))
-            {
-                item.gameObject.SetActive(true);
             }
         });
     }
@@ -878,9 +926,6 @@ public class NetworkClient : MonoBehaviour
                 return;
         }
 
-        Debug.Log("À§Ä¡ µ¥ÀÌÅÍ ¼ö½Å: " + data);
-        Debug.Log($"parts.Length = {parts.Length}");
-
         lastReceivedPositionSequence[clientId] = sequence;
 
         string[] position = parts[2].Split(',');
@@ -962,20 +1007,21 @@ public class NetworkClient : MonoBehaviour
         character.GetComponent<PlayerState>().nameText.text = FindObjectOfType<LodingManager>().Name;
     }
 
-    public void RequestSnowItem(int itemId)
+    public void RequestSnowItem(int ownerId)
     {
-        byte[] data = Encoding.UTF8.GetBytes(itemId.ToString());
+        Debug.Log($"SnowItem Owner: {ownerId}, My ClientId: {clientId}");
 
-        byte[] packet = new byte[data.Length + 2];
+        if (ownerId != clientId)
+            return;
+
+        byte[] packet = new byte[2];
 
         packet[0] = (byte)TcpPacketType.SnowItemRequest;
-        packet[1] = (byte)data.Length;
-
-        Array.Copy(data, 0, packet, 2, data.Length);
+        packet[1] = 0;
 
         stream.Write(packet, 0, packet.Length);
 
-        Debug.Log($"SnowItem È¹µæ ¿äÃ»: {itemId}");
+        Debug.Log($"SnowItem È¹µæ ¿äÃ»: {ownerId}");
     }
 
     public void RequestDroppedSnowItem(int itemId)

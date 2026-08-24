@@ -52,10 +52,9 @@ public class PlayerState : MonoBehaviour
     private void OnTriggerEnter(Collider other)
     {
         SnowItem snowItem = other.GetComponent<SnowItem>();
-
         if (snowItem != null)
         {
-            FindObjectOfType<NetworkClient>().RequestSnowItem(snowItem.itemId);
+            FindObjectOfType<NetworkClient>().RequestSnowItem(snowItem.ownerId);
         }
 
         DroppedSnowItem droppedSnowItem = other.GetComponent<DroppedSnowItem>();
