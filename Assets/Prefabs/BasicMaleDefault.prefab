@@ -5161,6 +5161,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   hpSlider: {fileID: 870559394644762835}
   nameText: {fileID: 8400177467866504550}
+  gunObject: {fileID: 1254473933739518667}
 --- !u!114 &3768155257893830578
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -8879,6 +8880,10 @@ PrefabInstance:
       propertyPath: m_Name
       value: AssaultRifleDefault
       objectReference: {fileID: 0}
+    - target: {fileID: 7775909171458005017, guid: 26c304c542935a646a21dd134e1c2cea, type: 3}
+      propertyPath: m_IsActive
+      value: 1
+      objectReference: {fileID: 0}
     m_RemovedComponents: []
     m_RemovedGameObjects: []
     m_AddedGameObjects: []
@@ -8887,6 +8892,11 @@ PrefabInstance:
 --- !u!4 &1254473933739030251 stripped
 Transform:
   m_CorrespondingSourceObject: {fileID: 7775909171457901625, guid: 26c304c542935a646a21dd134e1c2cea, type: 3}
+  m_PrefabInstance: {fileID: 8827439360299446994}
+  m_PrefabAsset: {fileID: 0}
+--- !u!1 &1254473933739518667 stripped
+GameObject:
+  m_CorrespondingSourceObject: {fileID: 7775909171458005017, guid: 26c304c542935a646a21dd134e1c2cea, type: 3}
   m_PrefabInstance: {fileID: 8827439360299446994}
   m_PrefabAsset: {fileID: 0}
 --- !u!1001 &9010154885913574595

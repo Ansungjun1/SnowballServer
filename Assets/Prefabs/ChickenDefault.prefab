@@ -2318,6 +2318,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   hpSlider: {fileID: 6122131508147496676}
   nameText: {fileID: 4708462472511805812}
+  gunObject: {fileID: 5279025838787244383}
 --- !u!65 &6947561885839124583
 BoxCollider:
   m_ObjectHideFlags: 0
@@ -7915,7 +7916,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 8105082179318372725, guid: b09ec5d8c38278946a04894adb8f59e2, type: 3}
       propertyPath: m_IsActive
-      value: 0
+      value: 1
       objectReference: {fileID: 0}
     - target: {fileID: 8105082179320301493, guid: b09ec5d8c38278946a04894adb8f59e2, type: 3}
       propertyPath: m_Materials.Array.data[0]
@@ -7929,6 +7930,11 @@ PrefabInstance:
 --- !u!4 &5279025838787014015 stripped
 Transform:
   m_CorrespondingSourceObject: {fileID: 8105082179318007125, guid: b09ec5d8c38278946a04894adb8f59e2, type: 3}
+  m_PrefabInstance: {fileID: 4123563652107954218}
+  m_PrefabAsset: {fileID: 0}
+--- !u!1 &5279025838787244383 stripped
+GameObject:
+  m_CorrespondingSourceObject: {fileID: 8105082179318372725, guid: b09ec5d8c38278946a04894adb8f59e2, type: 3}
   m_PrefabInstance: {fileID: 4123563652107954218}
   m_PrefabAsset: {fileID: 0}
 --- !u!1001 &4222495445406700118
@@ -7945,7 +7951,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 5494131160747400176, guid: 0af9ef9f43e952441a60d5ec8dbbbc3a, type: 3}
       propertyPath: m_IsActive
-      value: 1
+      value: 0
       objectReference: {fileID: 0}
     - target: {fileID: 5494131160747821008, guid: 0af9ef9f43e952441a60d5ec8dbbbc3a, type: 3}
       propertyPath: m_RootOrder

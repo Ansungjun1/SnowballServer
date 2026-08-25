@@ -2034,6 +2034,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   hpSlider: {fileID: 6309962336304696951}
   nameText: {fileID: 6569695750744146666}
+  gunObject: {fileID: 6446016308616010639}
 --- !u!65 &4299341191865230862
 BoxCollider:
   m_ObjectHideFlags: 0
@@ -7707,6 +7708,11 @@ PrefabInstance:
 --- !u!4 &6446016308615645103 stripped
 Transform:
   m_CorrespondingSourceObject: {fileID: 4982128866425777382, guid: 77c66d64e7d1a8b458934029d50fcbf1, type: 3}
+  m_PrefabInstance: {fileID: 2040353147547691849}
+  m_PrefabAsset: {fileID: 0}
+--- !u!1 &6446016308616010639 stripped
+GameObject:
+  m_CorrespondingSourceObject: {fileID: 4982128866425352390, guid: 77c66d64e7d1a8b458934029d50fcbf1, type: 3}
   m_PrefabInstance: {fileID: 2040353147547691849}
   m_PrefabAsset: {fileID: 0}
 --- !u!1001 &2656455478682486329

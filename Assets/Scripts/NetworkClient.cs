@@ -32,6 +32,9 @@ enum TcpPacketType : byte
     DroppedSnowItemResult = 0x0F,
 
     SnowFieldJoin = 0x10,
+
+    GunPurchaseRequest = 0x11,
+    GunPurchaseResult = 0x12,
 }
 
 enum UdpPacketType : byte
@@ -44,7 +47,6 @@ public class NetworkClient : MonoBehaviour
     private TcpClient tcpServer;
     private UdpClient udpClient;
     private NetworkStream stream;
-    public TextMeshProUGUI text;
     public GameObject character;
     private Dictionary<int, GameObject> otherPlayers = new Dictionary<int, GameObject>();
     private Dictionary<int, int> lastReceivedPositionSequence = new Dictionary<int, int>();
@@ -88,6 +90,8 @@ public class NetworkClient : MonoBehaviour
     private Dictionary<int, GameObject> snowballObjects = new Dictionary<int, GameObject>();
 
     private Dictionary<int, GameObject> snowFieldItems = new Dictionary<int, GameObject>();
+
+    private Dictionary<int, bool> gunItems = new Dictionary<int, bool>();
 
     private void Start()
     {
@@ -146,7 +150,7 @@ public class NetworkClient : MonoBehaviour
                 input_Chat_text.Select();
                 input_Chat_text.ActivateInputField();
             }
-            else if(Input.GetMouseButtonDown(0))
+            else if(Input.GetMouseButtonDown(0) && gunItems.TryGetValue(clientId, out bool hasGun) && hasGun)
             {
                 RequestThrowSnowball();
             }
@@ -212,8 +216,6 @@ public class NetworkClient : MonoBehaviour
         Array.Copy(data, 0, packet, 2, data.Length);
 
         udpClient.Send(packet, packet.Length);
-
-        text.text += "서버로 내 위치 전송" + "\n";
     }
 
     public void HandlePlayerChat()
@@ -249,7 +251,7 @@ public class NetworkClient : MonoBehaviour
         packet[1] = (byte)data.Length;
         Array.Copy(data, 0, packet, 2, data.Length);
         stream.Write(packet, 0, packet.Length);
-        text.text += "서버로 내 채팅 전송" + "\n";
+        Debug.Log("서버로 내 채팅 전송");
     }
 
     async Task ListenForServerMessages()
@@ -427,12 +429,53 @@ public class NetworkClient : MonoBehaviour
                 HandleFieldFromServer(packet);
                 break;
 
+            case (byte)TcpPacketType.GunPurchaseResult:
+                HandleGunPurchaseResult(packet);
+                break;
+
             default:
                 Debug.Log("알 수 없는 패킷 타입:" + packetType);
                 break;
         }
     }
 
+    void HandleGunPurchaseResult(byte[] buffer)
+    {
+        int messageLength = buffer[1];
+
+        string data =
+            Encoding.UTF8.GetString(
+                buffer,
+                2,
+                messageLength
+            );
+
+        if (!int.TryParse(data, out int ownerId))
+        {
+            return;
+        }
+
+        gunItems[ownerId] = true;
+
+        UnityMainThreadDispatcher.Enqueue(() =>
+        {
+            GameObject targetPlayer;
+
+            if (ownerId == clientId)
+            {
+                targetPlayer = character;
+            }
+            else if (!otherPlayers.TryGetValue(
+                ownerId,
+                out targetPlayer))
+            {
+                Debug.Log($"Gun 동기화 실패 - Player 아직 없음: {ownerId}");
+                return;
+            }
+
+            targetPlayer.GetComponent<PlayerState>().gunObject.SetActive(true);
+        });
+    }
     void HandleFieldFromServer(byte[] buffer)
     {
         int messageLength = buffer[1];
@@ -943,7 +986,6 @@ public class NetworkClient : MonoBehaviour
         UnityMainThreadDispatcher.Enqueue(() =>
         {
             UpdateOtherClientPosition(clientId, newPosition, yaw, isMoving);
-            text.text += ("위치 변경");
         });
     }
 
@@ -1022,6 +1064,21 @@ public class NetworkClient : MonoBehaviour
         stream.Write(packet, 0, packet.Length);
 
         Debug.Log($"SnowItem 획득 요청: {ownerId}");
+    }
+
+    public void RequestGunPurchase()
+    {
+        if (gunItems.TryGetValue(clientId, out bool hasGun) && hasGun)
+            return;
+
+        byte[] packet = new byte[2];
+
+        packet[0] = (byte)TcpPacketType.GunPurchaseRequest;
+        packet[1] = 0;
+
+        stream.Write(packet, 0, packet.Length);
+
+        Debug.Log($"Gun 구매 요청 {clientId}");
     }
 
     public void RequestDroppedSnowItem(int itemId)
@@ -1147,6 +1204,6 @@ public class NetworkClient : MonoBehaviour
             tcpServer.Close();
         if(udpClient != null)
             udpClient.Close();
-        text.text += "서버와 연결 종료" + "\n";
+        Debug.Log("서버와 연결 종료");
     }
 }

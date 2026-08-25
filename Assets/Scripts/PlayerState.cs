@@ -15,12 +15,15 @@ public class PlayerState : MonoBehaviour
 
     private PlayerMovement movement;
 
+    public GameObject gunObject;
     private void Awake()
     {
         movement = GetComponent<PlayerMovement>();
         MaxHp = 5;
         CurrentHp = MaxHp;
         SetHp(CurrentHp);
+
+        gunObject.SetActive(false);
     }
 
     public void SetHp(float hp)
@@ -61,6 +64,11 @@ public class PlayerState : MonoBehaviour
         if (droppedSnowItem != null)
         {
             FindObjectOfType<NetworkClient>().RequestDroppedSnowItem(droppedSnowItem.itemId);
+        }
+
+        if (other.tag == "Shop")
+        {
+            FindObjectOfType<NetworkClient>().RequestGunPurchase();
         }
     }
 }

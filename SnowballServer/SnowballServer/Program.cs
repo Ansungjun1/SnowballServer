@@ -94,6 +94,9 @@ namespace SnowballServer
         DroppedSnowItemResult = 0x0F,
 
         SnowFieldJoin = 0x10,
+
+        GunPurchaseRequest = 0x11,
+        GunPurchaseResult = 0x12,
     }
 
     enum UdpPacketType : byte
@@ -123,11 +126,16 @@ namespace SnowballServer
         private ConcurrentDictionary<int, SnowFieldState> snowFields = new ConcurrentDictionary<int, SnowFieldState>();
         ConcurrentDictionary<int, DroppedSnowballState> droppedSnowballs = new ConcurrentDictionary<int, DroppedSnowballState>();
 
+        private ConcurrentDictionary<int, bool> gunItems = new ConcurrentDictionary<int, bool>();
+
         private int nextSnowballId = 0;
         private int nextDropSnowballId = 0;
         private int nextClientId = 0;
 
         private readonly Random random = new Random();
+
+        private Vector3 gunShopPosition = new Vector3(6, 0, -3);
+        private int gunPrice = 2;
 
         public async Task StartGameLoop()
         {
@@ -338,6 +346,13 @@ namespace SnowballServer
             clientColor.TryRemove(clientId, out _);
             clientName.TryRemove(clientId, out _);
             clientPositions.TryRemove(clientId, out _);
+            clientYaws.TryRemove(clientId, out _);
+            lastPositionSequence.TryRemove(clientId, out _);
+            playerHps.TryRemove(clientId, out _);
+            playerDead.TryRemove(clientId, out _);
+            snowballCounts.TryRemove(clientId, out _);
+            gunItems.TryRemove(clientId, out _);
+
 
             foreach(var snowField in snowFields)
             {
@@ -457,6 +472,10 @@ namespace SnowballServer
                     HandleDroppedSnowItemRequest(packet, clientId);
                     break;
 
+                case (byte)TcpPacketType.GunPurchaseRequest:
+                    HandleGunPurchaseRequest(packet, clientId);
+                    break;
+
                 default:
                     Console.WriteLine("알 수 없는 TCP 패킷 타입: " + packetType);
                     break;
@@ -510,6 +529,7 @@ namespace SnowballServer
 
             playerHps[clientId] = 5;
             playerDead[clientId] = false;
+            gunItems[clientId] = false;
 
             playerSpawnPositions[clientId] = clientPositions[clientId];
 
@@ -542,6 +562,33 @@ namespace SnowballServer
             }
 
             BroadcastPlayerInfo(clientId, color, name);
+
+            foreach (var gunItem in gunItems)
+            {
+                if (!gunItem.Value)
+                    continue;
+
+                SendGunInfoToClient(
+                    tcpClient,
+                    gunItem.Key
+                );
+            }
+        }
+        void SendGunInfoToClient(TcpClient tcpClient, int onwerId)
+        {
+            byte[] data = Encoding.UTF8.GetBytes(onwerId.ToString());
+
+            byte[] packet = new byte[data.Length + 2];
+
+            packet[0] = (byte)TcpPacketType.GunPurchaseResult;
+            packet[1] = (byte)data.Length;
+            Array.Copy(data, 0, packet, 2, data.Length);
+
+            if (tcpClient.Connected)
+            {
+                NetworkStream stream = tcpClient.GetStream();
+                stream.Write(packet, 0, packet.Length);
+            }
         }
         void SendSnowFieldToClient(TcpClient tcpClient, int onwerId, Vector3 pos)
         {
@@ -769,6 +816,47 @@ namespace SnowballServer
             }
         }
 
+        void HandleGunPurchaseRequest(byte[] buffer, int clientId)
+        {
+            if (playerDead.TryGetValue(clientId, out bool isDead) && isDead)
+            {
+                return;
+            }
+
+            if (!clientPositions.TryGetValue(
+                clientId,
+                out Vector3 playerPosition))
+                return;
+
+            float dx = gunShopPosition.X - playerPosition.X;
+
+            float dz = gunShopPosition.Z - playerPosition.Z;
+
+            float distance = MathF.Sqrt(dx * dx + dz * dz);
+
+            if (distance > 2f)
+                return;
+
+            if (!snowballCounts.TryGetValue(
+                clientId,
+                out int snowballCount))
+                return;
+
+            if (snowballCount < gunPrice)
+                return;
+
+            if (!gunItems.TryGetValue(clientId, out bool hasGun))
+                return;
+
+            if (hasGun)
+                return;
+
+            snowballCounts[clientId] -= gunPrice;
+            gunItems[clientId] = true;
+
+            BroadcastGunPurchaseResult(clientId);
+        }
+
         void HandleDroppedSnowItemRequest(byte[] buffer, int clientId)
         {
             if (playerDead.TryGetValue(clientId, out bool isDead) && isDead)
@@ -799,7 +887,7 @@ namespace SnowballServer
 
             float distance = MathF.Sqrt(dx * dx + dz * dz);
 
-            if (distance > 2f)
+            if (distance > 2.5f)
                 return;
 
             if (!droppedSnowballs.TryRemove(itemId, out item))
@@ -820,6 +908,26 @@ namespace SnowballServer
                 newCount);
         }
 
+        void BroadcastGunPurchaseResult(int clientId)
+        {
+            byte[] data = Encoding.UTF8.GetBytes(clientId.ToString());
+
+            byte[] packet = new byte[data.Length + 2];
+
+            packet[0] = (byte)TcpPacketType.GunPurchaseResult;
+            packet[1] = (byte)data.Length;
+
+            Array.Copy(data, 0, packet, 2, data.Length);
+
+            foreach (var client in tcpClients)
+            {
+                if (!client.Value.Connected)
+                    continue;
+
+                NetworkStream stream = client.Value.GetStream();
+                stream.Write(packet, 0, packet.Length);
+            }
+        }
         void BroadcastDroppedSnowItemResult(int itemId, int clientId, int snowballCount)
         {
             string payload =
@@ -876,7 +984,7 @@ namespace SnowballServer
 
             float distance = MathF.Sqrt(dx * dx + dz * dz);
 
-            if (distance > 2f)
+            if (distance > 2.5f)
                 return;
 
             int newCount = snowballCounts.AddOrUpdate(
@@ -962,6 +1070,12 @@ namespace SnowballServer
             {
                 return;
             }
+
+            if (!gunItems.TryGetValue(clientId, out bool hasGun))
+                return;
+
+            if (!hasGun)
+                return;
 
             snowballCounts[clientId]--;
 
