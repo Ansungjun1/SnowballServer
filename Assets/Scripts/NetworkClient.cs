@@ -35,6 +35,9 @@ enum TcpPacketType : byte
 
     GunPurchaseRequest = 0x11,
     GunPurchaseResult = 0x12,
+    GunRemoved = 0x13,
+
+    PlayerKnockback = 0x14,
 }
 
 enum UdpPacketType : byte
@@ -91,7 +94,7 @@ public class NetworkClient : MonoBehaviour
 
     private Dictionary<int, GameObject> snowFieldItems = new Dictionary<int, GameObject>();
 
-    private Dictionary<int, bool> gunItems = new Dictionary<int, bool>();
+    private Dictionary<int, int> gunLevels = new Dictionary<int, int>();
 
     private void Start()
     {
@@ -150,7 +153,7 @@ public class NetworkClient : MonoBehaviour
                 input_Chat_text.Select();
                 input_Chat_text.ActivateInputField();
             }
-            else if(Input.GetMouseButtonDown(0) && gunItems.TryGetValue(clientId, out bool hasGun) && hasGun)
+            else if(Input.GetMouseButtonDown(0) && gunLevels.TryGetValue(clientId, out int gunLevel) && gunLevel > 0)
             {
                 RequestThrowSnowball();
             }
@@ -433,13 +436,64 @@ public class NetworkClient : MonoBehaviour
                 HandleGunPurchaseResult(packet);
                 break;
 
+            case (byte)TcpPacketType.GunRemoved:
+                HandleGunRemoveResult(packet);
+                break;
+
+            case (byte)TcpPacketType.PlayerKnockback:
+                HandleKnockbackResult(packet);
+                break;
+                
             default:
                 Debug.Log("알 수 없는 패킷 타입:" + packetType);
                 break;
         }
     }
 
-    void HandleGunPurchaseResult(byte[] buffer)
+    void HandleKnockbackResult(byte[] buffer)
+    {
+        int messageLength = buffer[1];
+
+        string data =
+            Encoding.UTF8.GetString(
+                buffer,
+                2,
+                messageLength
+            );
+
+        string[] parts = data.Split(':');
+
+        if (parts.Length != 2)
+            return;
+
+        if (!int.TryParse(parts[0], out int targetId))
+        {
+            return;
+        }
+
+        string[] positionParts = parts[1].Split(',');
+
+        if (positionParts.Length != 3)
+            return;
+
+        if (!float.TryParse(positionParts[0], out float dirX) ||
+            !float.TryParse(positionParts[1], out float dirY) ||
+            !float.TryParse(positionParts[2], out float dirZ))
+        {
+            return;
+        }
+
+
+        UnityMainThreadDispatcher.Enqueue(() =>
+        {
+            Vector3 knockbackDirection = new Vector3(dirX, dirY, dirZ);
+
+            Rigidbody rb = character.GetComponent<PlayerMovement>().GetRigidbdy();
+
+            rb.AddForce(knockbackDirection, ForceMode.Impulse);
+        });
+    }
+    void HandleGunRemoveResult(byte[] buffer)
     {
         int messageLength = buffer[1];
 
@@ -455,7 +509,7 @@ public class NetworkClient : MonoBehaviour
             return;
         }
 
-        gunItems[ownerId] = true;
+        gunLevels[ownerId] = 0;
 
         UnityMainThreadDispatcher.Enqueue(() =>
         {
@@ -464,6 +518,52 @@ public class NetworkClient : MonoBehaviour
             if (ownerId == clientId)
             {
                 targetPlayer = character;
+            }
+            else if (!otherPlayers.TryGetValue(
+                ownerId,
+                out targetPlayer))
+            {
+                return;
+            }
+
+            targetPlayer.GetComponent<PlayerState>().gunObject.SetActive(false);
+        });
+    }
+
+    void HandleGunPurchaseResult(byte[] buffer)
+    {
+        int messageLength = buffer[1];
+
+        string data =
+            Encoding.UTF8.GetString(
+                buffer,
+                2,
+                messageLength
+            );
+
+        string[] parts = data.Split(':');
+
+        if (parts.Length != 3)
+            return;
+
+        if (!int.TryParse(parts[0], out int ownerId) ||
+            !int.TryParse(parts[1], out int gunLevel) ||
+            !int.TryParse(parts[2], out int snowballCount))
+        {
+            return;
+        }
+
+        gunLevels[ownerId] = gunLevel;
+
+        UnityMainThreadDispatcher.Enqueue(() =>
+        {
+            GameObject targetPlayer;
+
+            if (ownerId == clientId)
+            {
+                targetPlayer = character;
+
+                mySnowballCount = snowballCount;
             }
             else if (!otherPlayers.TryGetValue(
                 ownerId,
@@ -1068,7 +1168,7 @@ public class NetworkClient : MonoBehaviour
 
     public void RequestGunPurchase()
     {
-        if (gunItems.TryGetValue(clientId, out bool hasGun) && hasGun)
+        if (gunLevels.TryGetValue(clientId, out int gunLevel) && gunLevel > 2)
             return;
 
         byte[] packet = new byte[2];

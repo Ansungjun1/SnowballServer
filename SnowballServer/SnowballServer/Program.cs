@@ -65,11 +65,11 @@ namespace SnowballServer
         public int OwnerId;
 
         public Vector3 Position;
+        public Vector3 SpawnPosition;
         public Vector3 Direction;
 
         public float Speed;
-
-        public float LifeTime;
+        public float MaxDistance;
     }
 
     enum TcpPacketType : byte
@@ -97,6 +97,9 @@ namespace SnowballServer
 
         GunPurchaseRequest = 0x11,
         GunPurchaseResult = 0x12,
+        GunRemoved = 0x13,
+
+        PlayerKnockback = 0x14,
     }
 
     enum UdpPacketType : byte
@@ -124,9 +127,9 @@ namespace SnowballServer
         private ConcurrentDictionary<int, int> snowballCounts = new ConcurrentDictionary<int, int>();
         private ConcurrentDictionary<int, SnowballState> snowballs = new ConcurrentDictionary<int, SnowballState>();
         private ConcurrentDictionary<int, SnowFieldState> snowFields = new ConcurrentDictionary<int, SnowFieldState>();
-        ConcurrentDictionary<int, DroppedSnowballState> droppedSnowballs = new ConcurrentDictionary<int, DroppedSnowballState>();
+        private ConcurrentDictionary<int, DroppedSnowballState> droppedSnowballs = new ConcurrentDictionary<int, DroppedSnowballState>();
 
-        private ConcurrentDictionary<int, bool> gunItems = new ConcurrentDictionary<int, bool>();
+        private ConcurrentDictionary<int, int> gunLevels = new ConcurrentDictionary<int, int>();
 
         private int nextSnowballId = 0;
         private int nextDropSnowballId = 0;
@@ -135,7 +138,8 @@ namespace SnowballServer
         private readonly Random random = new Random();
 
         private Vector3 gunShopPosition = new Vector3(6, 0, -3);
-        private int gunPrice = 2;
+
+        private ConcurrentDictionary<int, int> gunPrices = new ConcurrentDictionary<int, int>();
 
         public async Task StartGameLoop()
         {
@@ -160,6 +164,7 @@ namespace SnowballServer
             StartUdpServer(9051);
 
             InitializeSnowField();
+            InitializeGunPrice();
         }
 
         void StartTcpServer(int port)
@@ -181,6 +186,14 @@ namespace SnowballServer
             //ThreadPool.QueueUserWorkItem(ListenForUdpRequests);
             _ = ListenForUdpRequests();
         }
+
+        void InitializeGunPrice()
+        {
+            gunPrices[0] = 3;
+            gunPrices[1] = 10;
+            gunPrices[2] = 30;
+        }
+
         void InitializeSnowField()
         {
             snowFields[0] = new SnowFieldState
@@ -351,7 +364,7 @@ namespace SnowballServer
             playerHps.TryRemove(clientId, out _);
             playerDead.TryRemove(clientId, out _);
             snowballCounts.TryRemove(clientId, out _);
-            gunItems.TryRemove(clientId, out _);
+            gunLevels.TryRemove(clientId, out _);
 
 
             foreach(var snowField in snowFields)
@@ -529,7 +542,7 @@ namespace SnowballServer
 
             playerHps[clientId] = 5;
             playerDead[clientId] = false;
-            gunItems[clientId] = false;
+            gunLevels[clientId] = 0;
 
             playerSpawnPositions[clientId] = clientPositions[clientId];
 
@@ -563,25 +576,29 @@ namespace SnowballServer
 
             BroadcastPlayerInfo(clientId, color, name);
 
-            foreach (var gunItem in gunItems)
+            foreach (var gunLevel in gunLevels)
             {
-                if (!gunItem.Value)
+                if (gunLevel.Value == 0)
                     continue;
 
                 SendGunInfoToClient(
                     tcpClient,
-                    gunItem.Key
+                    gunLevel.Key
                 );
             }
         }
         void SendGunInfoToClient(TcpClient tcpClient, int onwerId)
         {
-            byte[] data = Encoding.UTF8.GetBytes(onwerId.ToString());
+            byte[] data = Encoding.UTF8.GetBytes(
+                $"{onwerId}" +
+                $"{gunLevels[onwerId]}" +
+                $"{snowballCounts[onwerId]}");
 
             byte[] packet = new byte[data.Length + 2];
 
             packet[0] = (byte)TcpPacketType.GunPurchaseResult;
             packet[1] = (byte)data.Length;
+
             Array.Copy(data, 0, packet, 2, data.Length);
 
             if (tcpClient.Connected)
@@ -842,17 +859,22 @@ namespace SnowballServer
                 out int snowballCount))
                 return;
 
+            if (!gunLevels.TryGetValue(clientId, out int gunLevel))
+                return;
+
+            if (gunLevel > 2)
+                return;
+
+            if (!gunPrices.TryGetValue(gunLevel, out int gunPrice))
+                return;
+
             if (snowballCount < gunPrice)
                 return;
 
-            if (!gunItems.TryGetValue(clientId, out bool hasGun))
-                return;
 
-            if (hasGun)
-                return;
 
             snowballCounts[clientId] -= gunPrice;
-            gunItems[clientId] = true;
+            gunLevels[clientId] = gunLevel + 1;
 
             BroadcastGunPurchaseResult(clientId);
         }
@@ -910,7 +932,10 @@ namespace SnowballServer
 
         void BroadcastGunPurchaseResult(int clientId)
         {
-            byte[] data = Encoding.UTF8.GetBytes(clientId.ToString());
+            byte[] data = Encoding.UTF8.GetBytes(
+                $"{clientId}:" +
+                $"{gunLevels[clientId]}:" +
+                $"{snowballCounts[clientId]}");
 
             byte[] packet = new byte[data.Length + 2];
 
@@ -1071,10 +1096,10 @@ namespace SnowballServer
                 return;
             }
 
-            if (!gunItems.TryGetValue(clientId, out bool hasGun))
+            if (!gunLevels.TryGetValue(clientId, out int gunLevel))
                 return;
 
-            if (!hasGun)
+            if (gunLevel == 0)
                 return;
 
             snowballCounts[clientId]--;
@@ -1096,10 +1121,11 @@ namespace SnowballServer
             {
                 Id = snowballId,
                 OwnerId = clientId,
+                SpawnPosition = spawnPosition,
                 Position = spawnPosition,
                 Direction = direction,
-                Speed = 10f,
-                LifeTime = 3f,
+                Speed = 10f * gunLevel,
+                MaxDistance = 30f,
             };
 
             snowballs[snowballId] = snowball;
@@ -1171,11 +1197,16 @@ namespace SnowballServer
                     * snowball.Speed
                     * deltaTime;
 
-                snowball.LifeTime -= deltaTime;
+                float traveledDistance =
+                    Vector3.Distance(
+                        snowball.SpawnPosition,
+                        snowball.Position
+                    );
 
-                if (snowball.LifeTime <= 0f)
+                if (traveledDistance >= snowball.MaxDistance)
                 {
                     removeSnowballIds.Add(snowball.Id);
+                    continue;
                 }
 
                 foreach (var player in clientPositions)
@@ -1197,7 +1228,8 @@ namespace SnowballServer
                     {
                         HandlePlayerHit(
                             snowball.OwnerId,
-                            playerId
+                            playerId,
+                            snowball.Direction
                         );
 
                         removeSnowballIds.Add(snowball.Id);
@@ -1214,7 +1246,8 @@ namespace SnowballServer
 
         void HandlePlayerHit(
             int attackerId,
-            int targetId)
+            int targetId,
+            Vector3 direction)
         {
             if (!playerHps.TryGetValue(
                 targetId,
@@ -1233,6 +1266,9 @@ namespace SnowballServer
             if (currentHp == 0)
             {
                 playerDead[targetId] = true;
+
+                gunLevels[targetId] = 0;
+                BroadcastGunRemove(targetId);
 
                 if (snowballCounts.TryGetValue(targetId, out int snowballCount))
                 {
@@ -1263,6 +1299,12 @@ namespace SnowballServer
 
                 _ = RespawnPlayer(targetId);
             }
+            else
+            {
+                Vector3 knockback = direction * 5f;
+
+                BroadcastKnockBack(knockback, targetId);
+            }
 
             BroadcastPlayerHit(
                 targetId,
@@ -1271,6 +1313,79 @@ namespace SnowballServer
             );
         }
 
+        void BroadcastKnockBack(Vector3 direction, int targetId)
+        {
+            byte[] data = Encoding.UTF8.GetBytes(
+                $"{targetId}:" +
+                $"{direction.X}," +
+                $"{direction.Y}," +
+                $"{direction.Z}");
+
+            byte[] packet = new byte[data.Length + 2];
+
+            packet[0] = (byte)TcpPacketType.PlayerKnockback;
+
+            packet[1] = (byte)data.Length;
+
+            Array.Copy(
+                data,
+                0,
+                packet,
+                2,
+                data.Length
+            );
+
+            foreach (var client in tcpClients)
+            {
+                if (!client.Value.Connected)
+                    continue;
+
+                if (client.Key != targetId)
+                    continue;
+
+                NetworkStream stream =
+                    client.Value.GetStream();
+
+                stream.Write(
+                    packet,
+                    0,
+                    packet.Length
+                );
+            }
+        }
+        void BroadcastGunRemove(int targetId)
+        {
+            byte[] data = Encoding.UTF8.GetBytes(targetId.ToString());
+ 
+            byte[] packet = new byte[data.Length + 2];
+
+            packet[0] = (byte)TcpPacketType.GunRemoved;
+
+            packet[1] = (byte)data.Length;
+
+            Array.Copy(
+                data,
+                0,
+                packet,
+                2,
+                data.Length
+            );
+
+            foreach (var client in tcpClients)
+            {
+                if (!client.Value.Connected)
+                    continue;
+
+                NetworkStream stream =
+                    client.Value.GetStream();
+
+                stream.Write(
+                    packet,
+                    0,
+                    packet.Length
+                );
+            }
+        }
         void BroadcastDroppedSnowballs(int id, Vector3 position, int count)
         {
             string payload =

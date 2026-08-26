@@ -113,4 +113,6 @@ public class PlayerMovement : MonoBehaviour
     {
         animator.SetTrigger("Death");
     }
+
+    public Rigidbody GetRigidbdy() => rb;
 }
