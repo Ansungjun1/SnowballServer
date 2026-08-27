@@ -9,6 +9,16 @@ using System;
 using System.Net;
 using System.Threading.Tasks;
 using UnityEngine.TextCore.Text;
+using System.Collections.Concurrent;
+using System.Data.SqlTypes;
+
+enum StorageAction : byte
+{
+    DepositAll = 0,
+    DepositHalf = 1,
+    WithdrawAll = 2,
+    WithdrawHalf = 3
+}
 
 enum TcpPacketType : byte
 {
@@ -38,6 +48,10 @@ enum TcpPacketType : byte
     GunRemoved = 0x13,
 
     PlayerKnockback = 0x14,
+
+    PlayerStorageJoin = 0x15,
+    StorageRequest = 0x16,
+    StorageResult = 0x17,
 }
 
 enum UdpPacketType : byte
@@ -96,10 +110,14 @@ public class NetworkClient : MonoBehaviour
 
     private Dictionary<int, int> gunLevels = new Dictionary<int, int>();
 
+    private Dictionary<int, StorageState> storages = new Dictionary<int, StorageState>();
+
     private void Start()
     {
         System.Random rand = new System.Random();
         ChoosePrefab = rand.Next(0, Prefab.Length);
+
+        InitializeStorages();
     }
     public void Connect()
     {
@@ -157,6 +175,15 @@ public class NetworkClient : MonoBehaviour
             {
                 RequestThrowSnowball();
             }
+
+            if (Input.GetKeyDown(KeyCode.E)) StorageActionRequest((byte)StorageAction.DepositAll);
+
+            else if (Input.GetKeyDown(KeyCode.R)) StorageActionRequest((byte)StorageAction.DepositHalf);
+
+            else if (Input.GetKeyDown(KeyCode.T)) StorageActionRequest((byte)StorageAction.WithdrawAll);
+
+            else if (Input.GetKeyDown(KeyCode.Y)) StorageActionRequest((byte)StorageAction.WithdrawHalf);
+
         }
         else
         {
@@ -190,7 +217,16 @@ public class NetworkClient : MonoBehaviour
             }
         }
     }
+    void InitializeStorages()
+    {
+        StorageState[] storageObjects =
+            FindObjectsOfType<StorageState>();
 
+        foreach (StorageState storage in storageObjects)
+        {
+            storages[storage.storageKey] = storage;
+        }
+    }
     void SendPositionToServer(Vector3 position)
     {
         if (!sessionReady) return;
@@ -443,11 +479,95 @@ public class NetworkClient : MonoBehaviour
             case (byte)TcpPacketType.PlayerKnockback:
                 HandleKnockbackResult(packet);
                 break;
-                
+
+            case (byte)TcpPacketType.PlayerStorageJoin:
+                HandlePlayerStorageJoin(packet);
+                break;
+
+            case (byte)TcpPacketType.StorageResult:
+                HandleStorageResult(packet);
+                break;
+
             default:
                 Debug.Log("알 수 없는 패킷 타입:" + packetType);
                 break;
         }
+    }
+
+    void HandleStorageResult(byte[] buffer)
+    {
+        int messageLength = buffer[1];
+
+        string data =
+            Encoding.UTF8.GetString(
+                buffer,
+                2,
+                messageLength
+            );
+
+        string[] parts = data.Split(':');
+
+        if (parts.Length != 3)
+            return;
+
+        if (!int.TryParse(parts[0], out int storageKey) ||
+            !int.TryParse(parts[1], out int storageCount) ||
+            !int.TryParse(parts[2], out int playerCount))
+        {
+            return;
+        }
+
+
+
+        UnityMainThreadDispatcher.Enqueue(() =>
+        {
+            if (!storages.TryGetValue(
+                storageKey,
+                out StorageState storage))
+            {
+                return;
+            }
+
+            storage.snowballCount = storageCount;
+            mySnowballCount = playerCount;
+        });
+    }
+
+    void HandlePlayerStorageJoin(byte[] buffer)
+    {
+        int messageLength = buffer[1];
+
+        string data =
+            Encoding.UTF8.GetString(
+                buffer,
+                2,
+                messageLength
+            );
+
+        string[] parts = data.Split(':');
+
+        if (parts.Length != 2)
+            return;
+
+        if (!int.TryParse(parts[0], out int ownerId) ||
+            !int.TryParse(parts[1], out int storageKey))
+        {
+            return;
+        }
+
+
+        UnityMainThreadDispatcher.Enqueue(() =>
+        {
+            if (!storages.TryGetValue(
+                storageKey,
+                out StorageState storage))
+            {
+                return;
+            }
+
+            storage.ownerId = ownerId;
+            storage.snowballCount = 0;
+        });
     }
 
     void HandleKnockbackResult(byte[] buffer)
@@ -1295,6 +1415,25 @@ public class NetworkClient : MonoBehaviour
         {
             animator.SetTrigger("Throw");
         }
+    }
+
+    public void RequestStorageJoin(int ownerId)
+    {
+        if (ownerId != clientId)
+            return;
+
+        Debug.Log("내 창고 진입");
+    }
+
+    void StorageActionRequest(byte action)
+    {
+        byte[] packet = new byte[3];
+
+        packet[0] = (byte)TcpPacketType.StorageRequest;
+        packet[1] = 1;
+        packet[2] = action;
+
+        stream.Write(packet, 0, packet.Length);
     }
 
     void OnApplicationQuit()

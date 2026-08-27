@@ -12,6 +12,7 @@ using System.Threading.Tasks;
 using System;
 using System.IO;
 using System.Net.Http;
+using static System.Collections.Specialized.BitVector32;
 
 namespace SnowballServer
 {
@@ -40,6 +41,11 @@ namespace SnowballServer
         }
     }
 
+    class StorageState
+    {
+        public int OwnerClientId;
+        public int SnowballCount;
+    }
     class SnowFieldState
     {
         public int OwnerClientId;
@@ -72,6 +78,14 @@ namespace SnowballServer
         public float MaxDistance;
     }
 
+    enum StorageAction : byte
+    {
+        DepositAll = 0,
+        DepositHalf = 1,
+        WithdrawAll = 2,
+        WithdrawHalf = 3
+    }
+
     enum TcpPacketType : byte
     {
         Chat = 0x01,
@@ -100,6 +114,10 @@ namespace SnowballServer
         GunRemoved = 0x13,
 
         PlayerKnockback = 0x14,
+
+        PlayerStorageJoin = 0x15,
+        StorageRequest = 0x16,
+        StorageResult = 0x17,
     }
 
     enum UdpPacketType : byte
@@ -122,7 +140,7 @@ namespace SnowballServer
         private ConcurrentDictionary<int, int> lastPositionSequence = new ConcurrentDictionary<int, int>();
         private ConcurrentDictionary<int, int> playerHps = new ConcurrentDictionary<int, int>();
         private ConcurrentDictionary<int, bool> playerDead = new ConcurrentDictionary<int, bool>();
-        private Dictionary<int, Vector3> playerSpawnPositions = new Dictionary<int, Vector3>();
+        private ConcurrentDictionary<int, Vector3> playerSpawnPositions = new ConcurrentDictionary<int, Vector3>();
 
         private ConcurrentDictionary<int, int> snowballCounts = new ConcurrentDictionary<int, int>();
         private ConcurrentDictionary<int, SnowballState> snowballs = new ConcurrentDictionary<int, SnowballState>();
@@ -130,6 +148,13 @@ namespace SnowballServer
         private ConcurrentDictionary<int, DroppedSnowballState> droppedSnowballs = new ConcurrentDictionary<int, DroppedSnowballState>();
 
         private ConcurrentDictionary<int, int> gunLevels = new ConcurrentDictionary<int, int>();
+        private ConcurrentDictionary<int, int> gunPrices = new ConcurrentDictionary<int, int>();
+
+        private Vector3 gunShopPosition = new Vector3(6, 0, -3);
+
+        private ConcurrentDictionary<int, StorageState> storages = new ConcurrentDictionary<int, StorageState>();
+
+        private Vector3 storagePosition = new Vector3(4, 0, -3);
 
         private int nextSnowballId = 0;
         private int nextDropSnowballId = 0;
@@ -137,9 +162,9 @@ namespace SnowballServer
 
         private readonly Random random = new Random();
 
-        private Vector3 gunShopPosition = new Vector3(6, 0, -3);
 
-        private ConcurrentDictionary<int, int> gunPrices = new ConcurrentDictionary<int, int>();
+
+
 
         public async Task StartGameLoop()
         {
@@ -165,6 +190,7 @@ namespace SnowballServer
 
             InitializeSnowField();
             InitializeGunPrice();
+            InitializeStorages();
         }
 
         void StartTcpServer(int port)
@@ -185,6 +211,18 @@ namespace SnowballServer
 
             //ThreadPool.QueueUserWorkItem(ListenForUdpRequests);
             _ = ListenForUdpRequests();
+        }
+
+        void InitializeStorages()
+        {
+            for (int i = 0; i < 4; i++)
+            {
+                storages[i] = new StorageState
+                {
+                    OwnerClientId = -1,
+                    SnowballCount = 0
+                };
+            }
         }
 
         void InitializeGunPrice()
@@ -375,6 +413,15 @@ namespace SnowballServer
                 }
             }
 
+            foreach (var storage in storages)
+            {
+                if (storage.Value.OwnerClientId == clientId)
+                {
+                    storage.Value.OwnerClientId = -1;
+                    storage.Value.SnowballCount = 0;
+                }
+            }
+
             string tokenToRemove = null;
 
             foreach (var token in tokens)
@@ -489,6 +536,10 @@ namespace SnowballServer
                     HandleGunPurchaseRequest(packet, clientId);
                     break;
 
+                case (byte)TcpPacketType.StorageRequest:
+                    HandleStorageRequest(packet, clientId);
+                    break;
+
                 default:
                     Console.WriteLine("알 수 없는 TCP 패킷 타입: " + packetType);
                     break;
@@ -562,6 +613,19 @@ namespace SnowballServer
                 }
             }
 
+            foreach (var storage in storages)
+            {
+                if (storage.Value.OwnerClientId == -1)
+                {
+                    storage.Value.OwnerClientId = clientId;
+
+                    storage.Value.SnowballCount = 0;
+
+                    BroadcastStorageInfo(clientId, storage.Key);
+                    break;
+                }
+            }
+
             foreach (var field in snowFields.Values)
             {
                 if (field.OwnerClientId == -1 || field.OwnerClientId == clientId)
@@ -628,6 +692,27 @@ namespace SnowballServer
             }
         }
 
+        void BroadcastStorageInfo(int ownerId, int storageKey)
+        {
+            byte[] data = Encoding.UTF8.GetBytes(
+                $"{ownerId}:" +
+                $"{storageKey}");
+
+            byte[] packet = new byte[data.Length + 2];
+
+            packet[0] = (byte)TcpPacketType.PlayerStorageJoin;
+            packet[1] = (byte)data.Length;
+            Array.Copy(data, 0, packet, 2, data.Length);
+
+            foreach (var client in tcpClients)//새로운 클라이언트를 이미 접속한 모든 클라이언트에 전송
+            {
+                if (client.Value.Connected)
+                {
+                    NetworkStream stream = client.Value.GetStream();
+                    stream.Write(packet, 0, packet.Length);
+                }
+            }
+        }
         void BroadcastSnowFieldInfo(int senderID, Vector3 pos)
         {
             byte[] data = Encoding.UTF8.GetBytes(
@@ -833,6 +918,89 @@ namespace SnowballServer
             }
         }
 
+        void HandleStorageRequest(byte[] buffer, int clientId)
+        {
+            if (playerDead.TryGetValue(clientId, out bool isDead) && isDead)
+            {
+                return;
+            }
+
+            if (!clientPositions.TryGetValue(
+                clientId,
+                out Vector3 playerPosition))
+                return;
+
+            float dx = storagePosition.X - playerPosition.X;
+
+            float dz = storagePosition.Z - playerPosition.Z;
+
+            float distance = MathF.Sqrt(dx * dx + dz * dz);
+
+            if (distance > 2f)
+                return;
+
+            if (!snowballCounts.TryGetValue(
+                clientId,
+                out int snowballCount))
+                return;
+
+            int messageLength = buffer[1];
+
+            StorageAction action = (StorageAction)buffer[2];
+
+            foreach (var storage in storages)
+            {
+                if (storage.Value.OwnerClientId == clientId)
+                {
+                    switch (action)
+                    {
+                        case StorageAction.DepositAll:
+                            if (snowballCounts[clientId] <= 0) return;
+
+                            storage.Value.SnowballCount += snowballCounts[clientId];
+                            snowballCounts[clientId] = 0;
+
+                            break;
+
+                        case StorageAction.DepositHalf:
+                            if (snowballCounts[clientId] <= 0) return;
+
+                            int amountDeposit = snowballCounts[clientId] / 2;
+
+                            storage.Value.SnowballCount += amountDeposit;
+                            snowballCounts[clientId] -= amountDeposit;
+
+                            break;
+
+                        case StorageAction.WithdrawAll:
+                            if (storage.Value.SnowballCount <= 0) return;
+
+                            snowballCounts[clientId] += storage.Value.SnowballCount;
+                            storage.Value.SnowballCount = 0;
+
+                            break;
+
+                        case StorageAction.WithdrawHalf:
+                            if (storage.Value.SnowballCount <= 0) return;
+
+                            int amountWithdraw = storage.Value.SnowballCount / 2;
+
+                            snowballCounts[clientId] += amountWithdraw;
+                            storage.Value.SnowballCount -= amountWithdraw;
+
+                            break;
+                    }
+
+                    Console.WriteLine("보관: " + storage.Value.SnowballCount);
+                    Console.WriteLine("소유: " + snowballCounts[clientId]);
+
+                    SendStorageActionResult(clientId, storage.Key, storage.Value.SnowballCount, snowballCounts[clientId]);
+
+                    return;
+                }
+            }
+        }
+
         void HandleGunPurchaseRequest(byte[] buffer, int clientId)
         {
             if (playerDead.TryGetValue(clientId, out bool isDead) && isDead)
@@ -877,6 +1045,33 @@ namespace SnowballServer
             gunLevels[clientId] = gunLevel + 1;
 
             BroadcastGunPurchaseResult(clientId);
+        }
+
+        void SendStorageActionResult(int clientId, int storageKey, int storageSnowballCount, int playerSnowballCount)
+        {
+            byte[] data = Encoding.UTF8.GetBytes(
+                $"{storageKey}:" +
+                $"{storageSnowballCount}:" +
+                $"{playerSnowballCount}");
+
+            byte[] packet = new byte[data.Length + 2];
+
+            packet[0] = (byte)TcpPacketType.StorageResult;
+            packet[1] = (byte)data.Length;
+
+            Array.Copy(data, 0, packet, 2, data.Length);
+
+            foreach (var client in tcpClients)
+            {
+                if (!client.Value.Connected)
+                    continue;
+
+                if (client.Key != clientId)
+                    continue;
+
+                NetworkStream stream = client.Value.GetStream();
+                stream.Write(packet, 0, packet.Length);
+            }
         }
 
         void HandleDroppedSnowItemRequest(byte[] buffer, int clientId)

@@ -70,5 +70,12 @@ public class PlayerState : MonoBehaviour
         {
             FindObjectOfType<NetworkClient>().RequestGunPurchase();
         }
+
+        StorageState storage = other.GetComponent<StorageState>();
+
+        if (storage != null)
+        {
+            FindObjectOfType<NetworkClient>().RequestStorageJoin(storage.ownerId);
+        }
     }
 }
