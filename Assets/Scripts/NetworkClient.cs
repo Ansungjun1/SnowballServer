@@ -11,6 +11,14 @@ using System.Threading.Tasks;
 using UnityEngine.TextCore.Text;
 using System.Collections.Concurrent;
 using System.Data.SqlTypes;
+using Unity.VisualScripting;
+
+enum GameState
+{
+    Waiting,
+    Playing,
+    Finished
+}
 
 enum StorageAction : byte
 {
@@ -52,6 +60,9 @@ enum TcpPacketType : byte
     PlayerStorageJoin = 0x15,
     StorageRequest = 0x16,
     StorageResult = 0x17,
+
+    GameStartRequest = 0x18,
+    GameStart = 0x19,
 }
 
 enum UdpPacketType : byte
@@ -85,7 +96,7 @@ public class NetworkClient : MonoBehaviour
     private bool sessionReady = false;
 
     //private string ServerIP = "58.231.147.182";
-    private string ServerIP = "192.168.0.5";
+    private string ServerIP = "192.168.55.207";
     private int udpPort = 9051;
     private int tcpPort = 9050;
 
@@ -112,6 +123,7 @@ public class NetworkClient : MonoBehaviour
 
     private Dictionary<int, StorageState> storages = new Dictionary<int, StorageState>();
 
+    private GameState gameState = GameState.Waiting;
     private void Start()
     {
         System.Random rand = new System.Random();
@@ -184,6 +196,8 @@ public class NetworkClient : MonoBehaviour
 
             else if (Input.GetKeyDown(KeyCode.Y)) StorageActionRequest((byte)StorageAction.WithdrawHalf);
 
+
+            if (Input.GetKeyDown(KeyCode.Escape) && gameState == GameState.Waiting) GameStartRequest();
         }
         else
         {
@@ -488,10 +502,62 @@ public class NetworkClient : MonoBehaviour
                 HandleStorageResult(packet);
                 break;
 
+            case (byte)TcpPacketType.GameStart:
+                HandleGameStart(packet);
+                break;
+
             default:
                 Debug.Log("알 수 없는 패킷 타입:" + packetType);
                 break;
         }
+    }
+
+    void HandleGameStart(byte[] buffer)
+    {
+        gameState = GameState.Playing;
+
+        mySnowballCount = 0;
+
+        PlayerState myState = character.GetComponent<PlayerState>();
+
+        myState.SetHp(5);
+        myState.ResetDeath();
+        myState.gunObject.SetActive(false);
+
+        gunLevels[clientId] = 0;
+
+        myState.transform.position = Vector3.zero;
+
+        foreach (var storage in storages)
+        {
+            if(storage.Value.ownerId == clientId)
+            {
+                storage.Value.snowballCount = 0;
+            }
+        }
+
+
+        foreach(var player in otherPlayers)
+        {
+            PlayerState targetPlayer = player.Value.GetComponent<PlayerState>();
+
+            
+
+            targetPlayer.SetHp(5);
+            targetPlayer.ResetDeath();
+            targetPlayer.gunObject.SetActive(false);
+
+            gunLevels[player.Key] = 0;
+        }
+
+        foreach(var dropSnowballItem in droppedSnowItems)
+        {
+            Destroy(dropSnowballItem.Value.gameObject);
+        }
+
+        droppedSnowItems.Clear();
+
+        Debug.Log("Game Start Received!");
     }
 
     void HandleStorageResult(byte[] buffer)
@@ -1436,6 +1502,15 @@ public class NetworkClient : MonoBehaviour
         stream.Write(packet, 0, packet.Length);
     }
 
+    void GameStartRequest()
+    {
+        byte[] packet = new byte[2];
+
+        packet[0] = (byte)TcpPacketType.GameStartRequest;
+        packet[1] = 0;
+
+        stream.Write(packet, 0, packet.Length);
+    }
     void OnApplicationQuit()
     {
         isRunning = false;

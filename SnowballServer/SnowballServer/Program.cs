@@ -13,6 +13,7 @@ using System;
 using System.IO;
 using System.Net.Http;
 using static System.Collections.Specialized.BitVector32;
+using static System.Runtime.InteropServices.JavaScript.JSType;
 
 namespace SnowballServer
 {
@@ -78,6 +79,13 @@ namespace SnowballServer
         public float MaxDistance;
     }
 
+    enum GameState
+    {
+        Waiting,
+        Playing,
+        Finished
+    }
+
     enum StorageAction : byte
     {
         DepositAll = 0,
@@ -118,6 +126,9 @@ namespace SnowballServer
         PlayerStorageJoin = 0x15,
         StorageRequest = 0x16,
         StorageResult = 0x17,
+
+        GameStartRequest = 0x18,
+        GameStart = 0x19,
     }
 
     enum UdpPacketType : byte
@@ -162,7 +173,7 @@ namespace SnowballServer
 
         private readonly Random random = new Random();
 
-
+        private GameState gameState = GameState.Waiting;
 
 
 
@@ -405,9 +416,9 @@ namespace SnowballServer
             gunLevels.TryRemove(clientId, out _);
 
 
-            foreach(var snowField in snowFields)
+            foreach (var snowField in snowFields)
             {
-                if(snowField.Value.OwnerClientId == clientId)
+                if (snowField.Value.OwnerClientId == clientId)
                 {
                     snowField.Value.OwnerClientId = -1;
                 }
@@ -540,6 +551,10 @@ namespace SnowballServer
                     HandleStorageRequest(packet, clientId);
                     break;
 
+                case (byte)TcpPacketType.GameStartRequest:
+                    HandleGameStartRequest(packet, clientId);
+                    break;
+
                 default:
                     Console.WriteLine("알 수 없는 TCP 패킷 타입: " + packetType);
                     break;
@@ -597,9 +612,9 @@ namespace SnowballServer
 
             playerSpawnPositions[clientId] = clientPositions[clientId];
 
-            foreach(var snowField in snowFields)
+            foreach (var snowField in snowFields)
             {
-                if(snowField.Value.OwnerClientId == -1)
+                if (snowField.Value.OwnerClientId == -1)
                 {
                     snowField.Value.OwnerClientId = clientId;
 
@@ -918,6 +933,79 @@ namespace SnowballServer
             }
         }
 
+        void HandleGameStartRequest(byte[] buffer, int clientId)
+        {
+            if (gameState != GameState.Waiting)
+                return;
+
+            StartGame();
+        }
+
+        void StartGame()
+        {
+            gameState = GameState.Playing;
+
+            Console.WriteLine("Game Start");
+
+
+
+            foreach (var client in tcpClients)
+            {
+                if (!client.Value.Connected)
+                    continue;
+
+
+                int storageNum = 0;
+                foreach (var storage in storages)
+                {
+                    if (storage.Value.OwnerClientId == client.Key)
+                    {
+                        Console.WriteLine($"hp: {playerHps[client.Key]}" +
+                            $"snowballCount: {snowballCounts[client.Key]}" +
+                            $"gunLevel: {gunLevels[client.Key]}" +
+                            $"storage: {storages[storageNum].SnowballCount}" +
+                            $"playerDead: {playerDead[client.Key]}");
+
+
+                        storage.Value.SnowballCount = 0;
+
+                        storageNum = storage.Key;
+                    }
+                }
+
+                if (playerHps.TryGetValue(client.Key, out _))
+                {
+                    playerHps[client.Key] = 5;
+                }
+
+                if (snowballCounts.TryGetValue(client.Key, out _))
+                {
+                    snowballCounts[client.Key] = 0;
+                }
+
+                if (gunLevels.TryGetValue(client.Key, out _))
+                {
+                    gunLevels[client.Key] = 0;
+                }
+
+                if (playerDead.TryGetValue(client.Key, out _))
+                {
+                    playerDead[client.Key] = false;
+                }
+
+                droppedSnowballs.Clear();
+
+
+                Console.WriteLine($"hp: {playerHps[client.Key]}" +
+                    $"snowballCount: {snowballCounts[client.Key]}" +
+                    $"gunLevel: {gunLevels[client.Key]}" +
+                    $"storage: {storages[storageNum].SnowballCount}" +
+                    $"playerDead: {playerDead[client.Key]}");
+
+            }
+            BroadcastGameStart();
+        }
+
         void HandleStorageRequest(byte[] buffer, int clientId)
         {
             if (playerDead.TryGetValue(clientId, out bool isDead) && isDead)
@@ -1125,6 +1213,23 @@ namespace SnowballServer
                 newCount);
         }
 
+        void BroadcastGameStart()
+        {
+            byte[] packet = new byte[2];
+
+            packet[0] = (byte)TcpPacketType.GameStart;
+            packet[1] = 0;
+
+            foreach (var client in tcpClients)
+            {
+                if (!client.Value.Connected)
+                    continue;
+
+                NetworkStream stream = client.Value.GetStream();
+                stream.Write(packet, 0, packet.Length);
+            }
+        }
+
         void BroadcastGunPurchaseResult(int clientId)
         {
             byte[] data = Encoding.UTF8.GetBytes(
@@ -1328,10 +1433,10 @@ namespace SnowballServer
             BroadcastSnowballSpawn(snowball);
 
             Console.WriteLine(
-    $"Snowball {snowballId} 생성 / " +
-    $"Owner {clientId} / " +
-    $"Position {spawnPosition}"
-);
+                $"Snowball {snowballId} 생성 / " +
+                $"Owner {clientId} / " +
+                $"Position {spawnPosition}"
+            );
         }
 
         void BroadcastSnowballSpawn(SnowballState snowball)
@@ -1551,7 +1656,7 @@ namespace SnowballServer
         void BroadcastGunRemove(int targetId)
         {
             byte[] data = Encoding.UTF8.GetBytes(targetId.ToString());
- 
+
             byte[] packet = new byte[data.Length + 2];
 
             packet[0] = (byte)TcpPacketType.GunRemoved;
@@ -1799,4 +1904,3 @@ namespace SnowballServer
         }
     }
 }
-
