@@ -129,6 +129,9 @@ namespace SnowballServer
 
         GameStartRequest = 0x18,
         GameStart = 0x19,
+
+        CentralSnowball = 0x20,
+        CentralSnowballResult = 0x21,
     }
 
     enum UdpPacketType : byte
@@ -175,7 +178,13 @@ namespace SnowballServer
 
         private GameState gameState = GameState.Waiting;
 
+        private int centralSnowballCount = 0;
+        private float centralSnowballTimer = 0f;
+        private const int CentralSnowballMaxCount = 10;
 
+        private const float CentralSnowballInterval = 5f;
+
+        private Vector3 centralSnowballPosition = new Vector3(11, 0, 91.8f);
 
         public async Task StartGameLoop()
         {
@@ -187,6 +196,11 @@ namespace SnowballServer
             while (isRunning)
             {
                 UpdateSnowballs(deltaTime);
+
+                if (gameState == GameState.Playing)
+                {
+                    UpdateCentralSnowball(deltaTime);
+                }
 
                 await Task.Delay(delayMs);
             }
@@ -555,6 +569,10 @@ namespace SnowballServer
                     HandleGameStartRequest(packet, clientId);
                     break;
 
+                case (byte)TcpPacketType.CentralSnowball:
+                    HandleCentralSnowballRequest(packet, clientId);
+                    break; 
+
                 default:
                     Console.WriteLine("알 수 없는 TCP 패킷 타입: " + packetType);
                     break;
@@ -609,6 +627,7 @@ namespace SnowballServer
             playerHps[clientId] = 5;
             playerDead[clientId] = false;
             gunLevels[clientId] = 0;
+            snowballCounts[clientId] = 0;
 
             playerSpawnPositions[clientId] = clientPositions[clientId];
 
@@ -946,25 +965,39 @@ namespace SnowballServer
             gameState = GameState.Playing;
 
             Console.WriteLine("Game Start");
+            Console.WriteLine($"tcpClients.Count: {tcpClients.Count}");
 
-
+            centralSnowballCount = 0;
+            centralSnowballTimer = 0f;
 
             foreach (var client in tcpClients)
             {
-                if (!client.Value.Connected)
-                    continue;
+                Console.WriteLine(
+$"Client {client.Key} / Connected: {client.Value.Connected}");
 
+                if (!client.Value.Connected)
+                {
+                    Console.WriteLine($"Client {client.Key} skipped");
+                    continue;
+                }
+
+                Console.WriteLine($"Client {client.Key} StartGame init");
 
                 int storageNum = 0;
                 foreach (var storage in storages)
                 {
+                    Console.WriteLine(
+    $"storage: {storage.Value.OwnerClientId}"+
+    $"client: {client.Key}");
+
                     if (storage.Value.OwnerClientId == client.Key)
                     {
-                        Console.WriteLine($"hp: {playerHps[client.Key]}" +
-                            $"snowballCount: {snowballCounts[client.Key]}" +
-                            $"gunLevel: {gunLevels[client.Key]}" +
-                            $"storage: {storages[storageNum].SnowballCount}" +
-                            $"playerDead: {playerDead[client.Key]}");
+
+                        Console.WriteLine($"hp: {playerHps[client.Key]}");
+                        Console.WriteLine($"snowballCount: {snowballCounts[client.Key]}");
+                        Console.WriteLine($"gunLevel: {gunLevels[client.Key]}");
+                        Console.WriteLine($"storage: {storage.Value.SnowballCount}");
+                        Console.WriteLine($"playerDead: {playerDead[client.Key]}");
 
 
                         storage.Value.SnowballCount = 0;
@@ -1004,6 +1037,54 @@ namespace SnowballServer
 
             }
             BroadcastGameStart();
+        }
+
+        void HandleCentralSnowballRequest(byte[] buffer, int clientId)
+        {
+            if (playerDead.TryGetValue(clientId, out bool isDead) && isDead)
+            {
+                return;
+            }
+
+            if (!clientPositions.TryGetValue(
+                clientId,
+                out Vector3 playerPosition))
+            {
+                return;
+            }
+
+            float dx = centralSnowballPosition.X - playerPosition.X;
+
+            float dz = centralSnowballPosition.Z - playerPosition.Z;
+
+            float distance = MathF.Sqrt(dx * dx + dz * dz);
+
+            if (distance > 10f)
+            {
+                return;
+
+            }
+
+
+            if (!snowballCounts.TryGetValue(
+                clientId,
+                out int snowballCount))
+                return;
+
+
+            if (centralSnowballCount <= 0)
+                return;
+
+
+            if (gameState != GameState.Playing)
+                return;
+
+
+            snowballCounts[clientId] += centralSnowballCount;
+            centralSnowballCount = 0;
+            centralSnowballTimer = 0f;
+
+            BroadcastCentralSnowballResult(clientId);
         }
 
         void HandleStorageRequest(byte[] buffer, int clientId)
@@ -1219,6 +1300,29 @@ namespace SnowballServer
 
             packet[0] = (byte)TcpPacketType.GameStart;
             packet[1] = 0;
+
+            foreach (var client in tcpClients)
+            {
+                if (!client.Value.Connected)
+                    continue;
+
+                NetworkStream stream = client.Value.GetStream();
+                stream.Write(packet, 0, packet.Length);
+            }
+        }
+
+        void BroadcastCentralSnowballResult(int clientId)
+        {
+            byte[] data = Encoding.UTF8.GetBytes(
+                $"{clientId}:" +
+                $"{snowballCounts[clientId]}");
+
+            byte[] packet = new byte[data.Length + 2];
+
+            packet[0] = (byte)TcpPacketType.CentralSnowballResult;
+            packet[1] = (byte)data.Length;
+
+            Array.Copy(data, 0, packet, 2, data.Length);
 
             foreach (var client in tcpClients)
             {
@@ -1881,6 +1985,23 @@ namespace SnowballServer
                     0,
                     packet.Length
                 );
+            }
+        }
+
+        void UpdateCentralSnowball(float deltaTime)
+        {
+            centralSnowballTimer += deltaTime;
+
+            if (centralSnowballCount >= CentralSnowballMaxCount)
+                return;
+
+            if(centralSnowballTimer >= CentralSnowballInterval)
+            {
+                centralSnowballCount += 1;
+                centralSnowballTimer = 0f;
+
+                Console.WriteLine($"Timer: {centralSnowballTimer}" +
+                    $"Count: {centralSnowballCount}");
             }
         }
 

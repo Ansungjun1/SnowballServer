@@ -77,5 +77,10 @@ public class PlayerState : MonoBehaviour
         {
             FindObjectOfType<NetworkClient>().RequestStorageJoin(storage.ownerId);
         }
+
+        if (other.tag == "Central")
+        {
+            FindObjectOfType<NetworkClient>().RequestCentralSnowball();
+        }
     }
 }

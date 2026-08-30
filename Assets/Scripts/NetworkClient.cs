@@ -12,6 +12,7 @@ using UnityEngine.TextCore.Text;
 using System.Collections.Concurrent;
 using System.Data.SqlTypes;
 using Unity.VisualScripting;
+using static System.Collections.Specialized.BitVector32;
 
 enum GameState
 {
@@ -63,6 +64,9 @@ enum TcpPacketType : byte
 
     GameStartRequest = 0x18,
     GameStart = 0x19,
+
+    CentralSnowball = 0x20,
+    CentralSnowballResult = 0x21,
 }
 
 enum UdpPacketType : byte
@@ -506,6 +510,10 @@ public class NetworkClient : MonoBehaviour
                 HandleGameStart(packet);
                 break;
 
+            case (byte)TcpPacketType.CentralSnowballResult:
+                HandleCentralSnowballResult(packet);
+                break;
+
             default:
                 Debug.Log("알 수 없는 패킷 타입:" + packetType);
                 break;
@@ -558,6 +566,39 @@ public class NetworkClient : MonoBehaviour
         droppedSnowItems.Clear();
 
         Debug.Log("Game Start Received!");
+    }
+
+    void HandleCentralSnowballResult(byte[] buffer)
+    {
+        int messageLength = buffer[1];
+
+        string data =
+            Encoding.UTF8.GetString(
+                buffer,
+                2,
+                messageLength
+            );
+
+        string[] parts = data.Split(':');
+
+        if (parts.Length != 2)
+            return;
+
+        if (!int.TryParse(parts[0], out int ownerId) ||
+            !int.TryParse(parts[1], out int snowballCount))
+        {
+            return;
+        }
+
+
+
+        UnityMainThreadDispatcher.Enqueue(() =>
+        {
+            if(clientId == ownerId)
+            {
+                mySnowballCount = snowballCount;
+            }
+        });
     }
 
     void HandleStorageResult(byte[] buffer)
@@ -1498,6 +1539,17 @@ public class NetworkClient : MonoBehaviour
         packet[0] = (byte)TcpPacketType.StorageRequest;
         packet[1] = 1;
         packet[2] = action;
+
+        stream.Write(packet, 0, packet.Length);
+    }
+
+    public void RequestCentralSnowball()
+    {
+        Debug.Log("충돌");
+        byte[] packet = new byte[2];
+
+        packet[0] = (byte)TcpPacketType.CentralSnowball;
+        packet[1] = 0;
 
         stream.Write(packet, 0, packet.Length);
     }
