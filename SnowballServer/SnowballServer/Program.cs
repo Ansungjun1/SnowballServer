@@ -42,6 +42,13 @@ namespace SnowballServer
         }
     }
 
+    class BridgeState
+    {
+        public int OwnerClientId;
+        public bool IsPurchased;
+        public Vector3 PurchasePosition;
+    }
+
     class StorageState
     {
         public int OwnerClientId;
@@ -132,6 +139,10 @@ namespace SnowballServer
 
         CentralSnowball = 0x20,
         CentralSnowballResult = 0x21,
+
+        BridgePurchaseRequest = 0x22,
+        BridgePurchaseResult = 0x23,
+        BridgeOtherPlayerJoin = 0x24,
     }
 
     enum UdpPacketType : byte
@@ -169,6 +180,11 @@ namespace SnowballServer
         private ConcurrentDictionary<int, StorageState> storages = new ConcurrentDictionary<int, StorageState>();
 
         private Vector3 storagePosition = new Vector3(4, 0, -3);
+
+        private ConcurrentDictionary<int, BridgeState> bridges = new ConcurrentDictionary<int, BridgeState>();
+
+        private Vector3 bridgePosition = new Vector3(10, 3, 10);
+        private const int BridgePrice = 5;
 
         private int nextSnowballId = 0;
         private int nextDropSnowballId = 0;
@@ -216,6 +232,7 @@ namespace SnowballServer
             InitializeSnowField();
             InitializeGunPrice();
             InitializeStorages();
+            InitializeBridges();
         }
 
         void StartTcpServer(int port)
@@ -236,6 +253,18 @@ namespace SnowballServer
 
             //ThreadPool.QueueUserWorkItem(ListenForUdpRequests);
             _ = ListenForUdpRequests();
+        }
+
+        void InitializeBridges()
+        {
+            for (int i = 0; i < 4; i++)
+            {
+                bridges[i] = new BridgeState
+                {
+                    OwnerClientId = -1,
+                    IsPurchased = false
+                };
+            }
         }
 
         void InitializeStorages()
@@ -447,6 +476,15 @@ namespace SnowballServer
                 }
             }
 
+            foreach (var bridge in bridges)
+            {
+                if (bridge.Value.OwnerClientId == clientId)
+                {
+                    bridge.Value.OwnerClientId = -1;
+                    bridge.Value.IsPurchased = false;
+                }
+            }
+
             string tokenToRemove = null;
 
             foreach (var token in tokens)
@@ -571,7 +609,11 @@ namespace SnowballServer
 
                 case (byte)TcpPacketType.CentralSnowball:
                     HandleCentralSnowballRequest(packet, clientId);
-                    break; 
+                    break;
+
+                case (byte)TcpPacketType.BridgePurchaseRequest:
+                    HandleBridgePurchaseRequest(packet, clientId);
+                    break;
 
                 default:
                     Console.WriteLine("알 수 없는 TCP 패킷 타입: " + packetType);
@@ -655,6 +697,9 @@ namespace SnowballServer
 
                     storage.Value.SnowballCount = 0;
 
+                    bridges[storage.Key].OwnerClientId = clientId;
+                    bridges[storage.Key].IsPurchased = false;
+
                     BroadcastStorageInfo(clientId, storage.Key);
                     break;
                 }
@@ -671,6 +716,20 @@ namespace SnowballServer
                     field.CurrentSnowPosition
                 );
             }
+
+            foreach (var bridge in bridges)
+            {
+                if (bridge.Value.OwnerClientId == -1 || bridge.Value.OwnerClientId == clientId)
+                    continue;
+
+                SendBridgeToClient(
+                    tcpClient,
+                    bridge.Value.OwnerClientId,
+                    bridge.Key
+                );
+            }
+
+
 
             BroadcastPlayerInfo(clientId, color, name);
 
@@ -697,6 +756,24 @@ namespace SnowballServer
             packet[0] = (byte)TcpPacketType.GunPurchaseResult;
             packet[1] = (byte)data.Length;
 
+            Array.Copy(data, 0, packet, 2, data.Length);
+
+            if (tcpClient.Connected)
+            {
+                NetworkStream stream = tcpClient.GetStream();
+                stream.Write(packet, 0, packet.Length);
+            }
+        }
+        void SendBridgeToClient(TcpClient tcpClient, int onwerId, int bridgeKey)
+        {
+            byte[] data = Encoding.UTF8.GetBytes(
+                $"{onwerId}:" +
+                $"{bridgeKey}");
+
+            byte[] packet = new byte[data.Length + 2];
+
+            packet[0] = (byte)TcpPacketType.BridgeOtherPlayerJoin;
+            packet[1] = (byte)data.Length;
             Array.Copy(data, 0, packet, 2, data.Length);
 
             if (tcpClient.Connected)
@@ -965,30 +1042,21 @@ namespace SnowballServer
             gameState = GameState.Playing;
 
             Console.WriteLine("Game Start");
-            Console.WriteLine($"tcpClients.Count: {tcpClients.Count}");
 
             centralSnowballCount = 0;
             centralSnowballTimer = 0f;
 
             foreach (var client in tcpClients)
             {
-                Console.WriteLine(
-$"Client {client.Key} / Connected: {client.Value.Connected}");
 
                 if (!client.Value.Connected)
                 {
-                    Console.WriteLine($"Client {client.Key} skipped");
                     continue;
                 }
-
-                Console.WriteLine($"Client {client.Key} StartGame init");
 
                 int storageNum = 0;
                 foreach (var storage in storages)
                 {
-                    Console.WriteLine(
-    $"storage: {storage.Value.OwnerClientId}"+
-    $"client: {client.Key}");
 
                     if (storage.Value.OwnerClientId == client.Key)
                     {
@@ -1001,8 +1069,9 @@ $"Client {client.Key} / Connected: {client.Value.Connected}");
 
 
                         storage.Value.SnowballCount = 0;
-
                         storageNum = storage.Key;
+
+                        bridges[storage.Key].IsPurchased = false;
                     }
                 }
 
@@ -1037,6 +1106,61 @@ $"Client {client.Key} / Connected: {client.Value.Connected}");
 
             }
             BroadcastGameStart();
+        }
+
+        void HandleBridgePurchaseRequest(byte[] buffer, int clientId)
+        {
+            if (playerDead.TryGetValue(clientId, out bool isDead) && isDead)
+            {
+                return;
+            }
+
+            if (gameState != GameState.Playing)
+                return;
+
+            if (!clientPositions.TryGetValue(
+                clientId,
+                out Vector3 playerPosition))
+            {
+                return;
+            }
+
+            float dx = bridgePosition.X - playerPosition.X;
+
+            float dz = bridgePosition.Z - playerPosition.Z;
+
+            float distance = MathF.Sqrt(dx * dx + dz * dz);
+
+            if (distance > 2f)
+            {
+                return;
+
+            }
+
+
+            if (!snowballCounts.TryGetValue(
+                clientId,
+                out int snowballCount))
+                return;
+
+
+            if (snowballCount < BridgePrice)
+                return;
+
+            foreach (var bridge in bridges)
+            {
+                if (bridge.Value.OwnerClientId == clientId)
+                {
+                    if (bridge.Value.IsPurchased) return;
+
+                    bridge.Value.IsPurchased = true;
+                    snowballCounts[clientId] -= BridgePrice;
+
+                    BroadcastBridgePurchaseResult(clientId);
+
+                    return;
+                }
+            }
         }
 
         void HandleCentralSnowballRequest(byte[] buffer, int clientId)
@@ -1300,6 +1424,29 @@ $"Client {client.Key} / Connected: {client.Value.Connected}");
 
             packet[0] = (byte)TcpPacketType.GameStart;
             packet[1] = 0;
+
+            foreach (var client in tcpClients)
+            {
+                if (!client.Value.Connected)
+                    continue;
+
+                NetworkStream stream = client.Value.GetStream();
+                stream.Write(packet, 0, packet.Length);
+            }
+        }
+
+        void BroadcastBridgePurchaseResult(int clientId)
+        {
+            byte[] data = Encoding.UTF8.GetBytes(
+                $"{clientId}:" +
+                $"{snowballCounts[clientId]}");
+
+            byte[] packet = new byte[data.Length + 2];
+
+            packet[0] = (byte)TcpPacketType.BridgePurchaseResult;
+            packet[1] = (byte)data.Length;
+
+            Array.Copy(data, 0, packet, 2, data.Length);
 
             foreach (var client in tcpClients)
             {

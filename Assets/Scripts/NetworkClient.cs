@@ -12,7 +12,6 @@ using UnityEngine.TextCore.Text;
 using System.Collections.Concurrent;
 using System.Data.SqlTypes;
 using Unity.VisualScripting;
-using static System.Collections.Specialized.BitVector32;
 
 enum GameState
 {
@@ -67,6 +66,10 @@ enum TcpPacketType : byte
 
     CentralSnowball = 0x20,
     CentralSnowballResult = 0x21,
+
+    BridgePurchaseRequest = 0x22,
+    BridgePurchaseResult = 0x23,
+    BridgeOtherPlayerJoin = 0x24,
 }
 
 enum UdpPacketType : byte
@@ -126,6 +129,9 @@ public class NetworkClient : MonoBehaviour
     private Dictionary<int, int> gunLevels = new Dictionary<int, int>();
 
     private Dictionary<int, StorageState> storages = new Dictionary<int, StorageState>();
+    private Dictionary<int, BridgeState> bridges = new Dictionary<int, BridgeState>();
+
+    private const int BridgePrice = 5;
 
     private GameState gameState = GameState.Waiting;
     private void Start()
@@ -134,6 +140,7 @@ public class NetworkClient : MonoBehaviour
         ChoosePrefab = rand.Next(0, Prefab.Length);
 
         InitializeStorages();
+        InitializeBridges();
     }
     public void Connect()
     {
@@ -243,6 +250,18 @@ public class NetworkClient : MonoBehaviour
         foreach (StorageState storage in storageObjects)
         {
             storages[storage.storageKey] = storage;
+        }
+    }
+    void InitializeBridges()
+    {
+        BridgeState[] bridgeObjects =
+    FindObjectsOfType<BridgeState>();
+
+        foreach (BridgeState bridge in bridgeObjects)
+        {
+            bridges[bridge.bridgeKey] = bridge;
+
+            bridge.gameObject.SetActive(false);
         }
     }
     void SendPositionToServer(Vector3 position)
@@ -514,6 +533,14 @@ public class NetworkClient : MonoBehaviour
                 HandleCentralSnowballResult(packet);
                 break;
 
+            case (byte)TcpPacketType.BridgePurchaseResult:
+                HandleBridgePurchaseResult(packet);
+                break;
+
+            case (byte)TcpPacketType.BridgeOtherPlayerJoin:
+                HandleBridgeOtherPlayerJoin(packet);
+                break;
+                
             default:
                 Debug.Log("알 수 없는 패킷 타입:" + packetType);
                 break;
@@ -544,8 +571,12 @@ public class NetworkClient : MonoBehaviour
             }
         }
 
+        foreach (var bridge in bridges)
+        {
+            bridge.Value.gameObject.SetActive(false);
+        }
 
-        foreach(var player in otherPlayers)
+        foreach (var player in otherPlayers)
         {
             PlayerState targetPlayer = player.Value.GetComponent<PlayerState>();
 
@@ -568,6 +599,46 @@ public class NetworkClient : MonoBehaviour
         Debug.Log("Game Start Received!");
     }
 
+    void HandleBridgePurchaseResult(byte[] buffer)
+    {
+        int messageLength = buffer[1];
+
+        string data =
+            Encoding.UTF8.GetString(
+                buffer,
+                2,
+                messageLength
+            );
+
+        string[] parts = data.Split(':');
+
+        if (parts.Length != 2)
+            return;
+
+        if (!int.TryParse(parts[0], out int ownerId) ||
+            !int.TryParse(parts[1], out int snowballCount))
+        {
+            return;
+        }
+
+
+
+        UnityMainThreadDispatcher.Enqueue(() =>
+        {
+            foreach(var bridge in bridges)
+            {
+                if(bridge.Value.ownerId == ownerId)
+                {
+                    bridges[bridge.Key].gameObject.SetActive(true);
+                }
+            }
+
+            if(ownerId == clientId)
+            {
+                mySnowballCount = snowballCount;
+            }
+        });
+    }
     void HandleCentralSnowballResult(byte[] buffer)
     {
         int messageLength = buffer[1];
@@ -674,6 +745,16 @@ public class NetworkClient : MonoBehaviour
 
             storage.ownerId = ownerId;
             storage.snowballCount = 0;
+
+            if (!bridges.TryGetValue(
+                storageKey,
+                out BridgeState bridge))
+            {
+                Debug.Log("없음");
+                return;
+            }
+
+            bridge.ownerId = ownerId;
         });
     }
 
@@ -803,6 +884,38 @@ public class NetworkClient : MonoBehaviour
             targetPlayer.GetComponent<PlayerState>().gunObject.SetActive(true);
         });
     }
+
+    void HandleBridgeOtherPlayerJoin(byte[] buffer)
+    {
+        int messageLength = buffer[1];
+
+        string data =
+            Encoding.UTF8.GetString(
+                buffer,
+                2,
+                messageLength
+            );
+
+        string[] parts = data.Split(':');
+
+        if (parts.Length != 2)
+            return;
+
+        if (!int.TryParse(parts[0], out int ownerId) ||
+            !int.TryParse(parts[1], out int bridgeKey))
+        {
+            return;
+        }
+
+        UnityMainThreadDispatcher.Enqueue(() =>
+        {
+            BridgeOtherPlayerInfo(
+                ownerId,
+                bridgeKey
+            );
+        });
+    }
+
     void HandleFieldFromServer(byte[] buffer)
     {
         int messageLength = buffer[1];
@@ -848,6 +961,24 @@ public class NetworkClient : MonoBehaviour
         });
     }
     
+    void BridgeOtherPlayerInfo(int ownerId, int bridgeKey)
+    {
+        if (bridges.TryGetValue(
+        bridgeKey,
+        out BridgeState bridge))
+        {
+            bridge.bridgeKey = bridgeKey;
+            bridge.ownerId = ownerId;
+            return;
+        }
+
+        BridgeState bridgeObjects = FindObjectOfType<BridgeState>();
+
+        bridges[bridgeKey] = bridgeObjects;
+        bridges[bridgeKey].bridgeKey = bridgeKey;
+        bridges[bridgeKey].ownerId = ownerId;
+    }
+
     void SnowFieldInfo(int ownerId, Vector3 pos)
     {
         if (snowFieldItems.TryGetValue(
@@ -1188,6 +1319,14 @@ public class NetworkClient : MonoBehaviour
             {
                 Destroy(player);
                 otherPlayers.Remove(disconnectedClientId);
+
+                foreach(var bridge in bridges)
+                {
+                    if(bridge.Value.ownerId == disconnectedClientId)
+                    {
+                        bridge.Value.gameObject.SetActive(false);
+                    }
+                }
             }
         });
     }
@@ -1543,9 +1682,22 @@ public class NetworkClient : MonoBehaviour
         stream.Write(packet, 0, packet.Length);
     }
 
+    public void RequestPurchaseBridge()
+    {
+        if (gameState != GameState.Playing) return;
+
+        byte[] packet = new byte[2];
+
+        packet[0] = (byte)TcpPacketType.BridgePurchaseRequest;
+        packet[1] = 0;
+
+        stream.Write(packet, 0, packet.Length);
+    }
+
     public void RequestCentralSnowball()
     {
-        Debug.Log("충돌");
+        if (gameState != GameState.Playing) return;
+
         byte[] packet = new byte[2];
 
         packet[0] = (byte)TcpPacketType.CentralSnowball;

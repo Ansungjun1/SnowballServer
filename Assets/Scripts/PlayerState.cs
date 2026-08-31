@@ -82,5 +82,10 @@ public class PlayerState : MonoBehaviour
         {
             FindObjectOfType<NetworkClient>().RequestCentralSnowball();
         }
+
+        if (other.tag == "Bridge")
+        {
+            FindObjectOfType<NetworkClient>().RequestPurchaseBridge();
+        }
     }
 }
