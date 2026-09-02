@@ -99,6 +99,7 @@ public class NetworkClient : MonoBehaviour
     private readonly object lockObject = new object();  // lockÀ» À§ÇÑ °´Ã¼
 
     private int clientId = -1;
+    private int baseKey = -1;
     private string sessionToken;
     private bool sessionReady = false;
 
@@ -141,6 +142,7 @@ public class NetworkClient : MonoBehaviour
 
         InitializeStorages();
         InitializeBridges();
+        InitializedField();
     }
     public void Connect()
     {
@@ -262,6 +264,23 @@ public class NetworkClient : MonoBehaviour
             bridges[bridge.bridgeKey] = bridge;
 
             bridge.gameObject.SetActive(false);
+        }
+    }
+    void InitializedField()
+    {
+        for(int i = 0; i < 4; i++)
+        {
+            GameObject snowItem =
+                Instantiate(
+                snowItemPrefab,
+                new Vector3(0, 1000, 0),
+                Quaternion.Euler(-90, 0, 0));
+
+            snowItem.GetComponent<SnowItem>().ownerId = -1;
+
+            snowFieldItems[i] = snowItem;
+
+            snowItem.SetActive(false);
         }
     }
     void SendPositionToServer(Vector3 position)
@@ -561,15 +580,9 @@ public class NetworkClient : MonoBehaviour
 
         gunLevels[clientId] = 0;
 
-        myState.transform.position = Vector3.zero;
+        myState.transform.position = SpawnPos[baseKey].position;
 
-        foreach (var storage in storages)
-        {
-            if(storage.Value.ownerId == clientId)
-            {
-                storage.Value.snowballCount = 0;
-            }
-        }
+        storages[baseKey].snowballCount = 0;
 
         foreach (var bridge in bridges)
         {
@@ -579,8 +592,6 @@ public class NetworkClient : MonoBehaviour
         foreach (var player in otherPlayers)
         {
             PlayerState targetPlayer = player.Value.GetComponent<PlayerState>();
-
-            
 
             targetPlayer.SetHp(5);
             targetPlayer.ResetDeath();
@@ -629,7 +640,7 @@ public class NetworkClient : MonoBehaviour
             {
                 if(bridge.Value.ownerId == ownerId)
                 {
-                    bridges[bridge.Key].gameObject.SetActive(true);
+                    bridge.Value.gameObject.SetActive(true);
                 }
             }
 
@@ -929,15 +940,16 @@ public class NetworkClient : MonoBehaviour
 
         string[] parts = data.Split(':');
 
-        if (parts.Length != 2)
+        if (parts.Length != 3)
             return;
 
-        if (!int.TryParse(parts[0], out int ownerId))
+        if (!int.TryParse(parts[0], out int ownerId) ||
+            !int.TryParse(parts[1], out int fieldKey))
         {
             return;
         }
 
-        string[] positionParts = parts[1].Split(',');
+        string[] positionParts = parts[2].Split(',');
 
         if (positionParts.Length != 3)
             return;
@@ -956,6 +968,7 @@ public class NetworkClient : MonoBehaviour
         {
             SnowFieldInfo(
                 ownerId,
+                fieldKey,
                 spawnPosition
             );
         });
@@ -967,37 +980,22 @@ public class NetworkClient : MonoBehaviour
         bridgeKey,
         out BridgeState bridge))
         {
-            bridge.bridgeKey = bridgeKey;
             bridge.ownerId = ownerId;
             return;
         }
-
-        BridgeState bridgeObjects = FindObjectOfType<BridgeState>();
-
-        bridges[bridgeKey] = bridgeObjects;
-        bridges[bridgeKey].bridgeKey = bridgeKey;
-        bridges[bridgeKey].ownerId = ownerId;
     }
 
-    void SnowFieldInfo(int ownerId, Vector3 pos)
+    void SnowFieldInfo(int ownerId, int fieldKey, Vector3 pos)
     {
         if (snowFieldItems.TryGetValue(
-        ownerId,
+        fieldKey,
         out GameObject existingItem))
         {
+            existingItem.SetActive(true);
             existingItem.transform.position = pos;
+            existingItem.GetComponent<SnowItem>().ownerId = ownerId;
             return;
         }
-
-        GameObject snowItem =
-            Instantiate(
-                snowItemPrefab,
-                pos,
-                Quaternion.Euler(-90, 0, 0));
-
-        snowItem.GetComponent<SnowItem>().ownerId = ownerId;
-
-        snowFieldItems[ownerId] = snowItem;
     }
 
     void HandleDroppedSnowballs(byte[] buffer)
@@ -1268,16 +1266,17 @@ public class NetworkClient : MonoBehaviour
 
         string[] parts = data.Split(':');
 
-        if (parts.Length != 3)
+        if (parts.Length != 4)
             return;
 
         if (!int.TryParse(parts[0], out int ownerId) ||
-            !int.TryParse(parts[1], out int snowballCount))
+            !int.TryParse(parts[1], out int fieldKey) ||
+            !int.TryParse(parts[2], out int snowballCount))
         {
             return;
         }
 
-        string[] positionParts = parts[2].Split(',');
+        string[] positionParts = parts[3].Split(',');
 
         if (positionParts.Length != 3)
             return;
@@ -1295,7 +1294,7 @@ public class NetworkClient : MonoBehaviour
             {
                 mySnowballCount = snowballCount;
 
-                SnowFieldInfo(ownerId, new Vector3(x, y, z));
+                SnowFieldInfo(ownerId, fieldKey, new Vector3(x, y, z));
 
                 Debug.Log(
                     $"´«µ¢ÀÌ È¹µæ! ÇöÀç °³¼ö: {mySnowballCount}"
@@ -1370,13 +1369,17 @@ public class NetworkClient : MonoBehaviour
 
         string data = Encoding.UTF8.GetString(buffer, 2, messageLength);
 
-        string[] parts = data.Split(':', 2);
+        string[] parts = data.Split(':', 3);
 
         clientId = int.Parse(parts[0]);
         sessionToken = parts[1];
+        baseKey = int.Parse(parts[2]);
 
         sessionReady = true;
         Debug.Log($"¼­¹ö¿¡¼­ ClientId ¹ß±Þ: {clientId}");
+
+        SetCharacter(baseKey);
+
 
 
 
@@ -1502,15 +1505,12 @@ public class NetworkClient : MonoBehaviour
         }
     }
 
-    public void SetCharacter()
+    public void SetCharacter(int fieldKey)
     {
-        System.Random rand = new System.Random();
-        int num = rand.Next(0, SpawnPos.Length);
-
-        character = Instantiate(Prefab[ChoosePrefab], SpawnPos[num].position, Quaternion.identity);
-
+        character = Instantiate(Prefab[ChoosePrefab], SpawnPos[fieldKey].position, Quaternion.identity);
+        Debug.Log(fieldKey);
         FindObjectOfType<CameraManager>().SetTarget(character.transform);
-        SendPositionToServer(SpawnPos[num].position);
+        SendPositionToServer(SpawnPos[fieldKey].position);
 
         character.GetComponent<PlayerState>().nameText.text = FindObjectOfType<LodingManager>().Name;
     }

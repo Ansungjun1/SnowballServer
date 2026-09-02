@@ -158,11 +158,15 @@ namespace SnowballServer
         private ConcurrentDictionary<int, TcpClient> tcpClients = new ConcurrentDictionary<int, TcpClient>();
         private ConcurrentDictionary<int, IPEndPoint> udpClients = new ConcurrentDictionary<int, IPEndPoint>();
         private ConcurrentDictionary<string, int> tokens = new ConcurrentDictionary<string, int>();
+        private ConcurrentDictionary<int, int> playerBaseKeys = new ConcurrentDictionary<int, int>();
+
         private ConcurrentDictionary<int, Vector3> clientPositions = new ConcurrentDictionary<int, Vector3>();
         private ConcurrentDictionary<int, float> clientYaws = new ConcurrentDictionary<int, float>();
         private ConcurrentDictionary<int, int> clientColor = new ConcurrentDictionary<int, int>();
         private ConcurrentDictionary<int, string> clientName = new ConcurrentDictionary<int, string>();
+
         private ConcurrentDictionary<int, int> lastPositionSequence = new ConcurrentDictionary<int, int>();
+
         private ConcurrentDictionary<int, int> playerHps = new ConcurrentDictionary<int, int>();
         private ConcurrentDictionary<int, bool> playerDead = new ConcurrentDictionary<int, bool>();
         private ConcurrentDictionary<int, Vector3> playerSpawnPositions = new ConcurrentDictionary<int, Vector3>();
@@ -175,15 +179,16 @@ namespace SnowballServer
         private ConcurrentDictionary<int, int> gunLevels = new ConcurrentDictionary<int, int>();
         private ConcurrentDictionary<int, int> gunPrices = new ConcurrentDictionary<int, int>();
 
-        private Vector3 gunShopPosition = new Vector3(6, 0, -3);
+        private ConcurrentDictionary<int, Vector3> gunShopPosition = new ConcurrentDictionary<int, Vector3>();
 
         private ConcurrentDictionary<int, StorageState> storages = new ConcurrentDictionary<int, StorageState>();
 
-        private Vector3 storagePosition = new Vector3(4, 0, -3);
+        private ConcurrentDictionary<int, Vector3> storagePosition = new ConcurrentDictionary<int, Vector3>();
 
         private ConcurrentDictionary<int, BridgeState> bridges = new ConcurrentDictionary<int, BridgeState>();
 
-        private Vector3 bridgePosition = new Vector3(10, 3, 10);
+        private ConcurrentDictionary<int, Vector3> bridgePosition = new ConcurrentDictionary<int, Vector3>();
+
         private const int BridgePrice = 5;
 
         private int nextSnowballId = 0;
@@ -224,15 +229,15 @@ namespace SnowballServer
 
         public void Connect()
         {
-            // TCP 시작
-            StartTcpServer(9050);
-            // UDP 시작
-            StartUdpServer(9051);
-
             InitializeSnowField();
             InitializeGunPrice();
             InitializeStorages();
             InitializeBridges();
+
+            // TCP 시작
+            StartTcpServer(9050);
+            // UDP 시작
+            StartUdpServer(9051);
         }
 
         void StartTcpServer(int port)
@@ -265,6 +270,11 @@ namespace SnowballServer
                     IsPurchased = false
                 };
             }
+
+            bridgePosition[0] = new Vector3(10, 3, 10);
+            bridgePosition[1] = new Vector3(88, 3, 90);
+            bridgePosition[2] = new Vector3(8, 3, 173);
+            bridgePosition[3] = new Vector3(-52, 3, 90);
         }
 
         void InitializeStorages()
@@ -277,6 +287,11 @@ namespace SnowballServer
                     SnowballCount = 0
                 };
             }
+
+            storagePosition[0] = new Vector3(4, 0, -3);
+            storagePosition[1] = new Vector3(101, 0, 84);
+            storagePosition[2] = new Vector3(14, 0, 186);
+            storagePosition[3] = new Vector3(-65, 0, 96);
         }
 
         void InitializeGunPrice()
@@ -284,6 +299,11 @@ namespace SnowballServer
             gunPrices[0] = 3;
             gunPrices[1] = 10;
             gunPrices[2] = 30;
+
+            gunShopPosition[0] = new Vector3(6, 0, -3);
+            gunShopPosition[1] = new Vector3(101, 0, 86);
+            gunShopPosition[2] = new Vector3(12, 0, 186);
+            gunShopPosition[3] = new Vector3(-65, 0, 94);
         }
 
         void InitializeSnowField()
@@ -302,31 +322,31 @@ namespace SnowballServer
             {
                 OwnerClientId = -1,
 
-                MinX = 6,
-                MaxX = 10,
+                MinX = 93,
+                MaxX = 98,
 
-                MinZ = 6,
-                MaxZ = 10,
+                MinZ = 85,
+                MaxZ = 90,
             };
             snowFields[2] = new SnowFieldState
             {
                 OwnerClientId = -1,
 
-                MinX = -5,
-                MaxX = -1,
+                MinX = 13,
+                MaxX = 18,
 
-                MinZ = -5,
-                MaxZ = -1,
+                MinZ = 178,
+                MaxZ = 183,
             };
             snowFields[3] = new SnowFieldState
             {
                 OwnerClientId = -1,
 
-                MinX = -10,
-                MaxX = -6,
+                MinX = -57,
+                MaxX = -52,
 
-                MinZ = -10,
-                MaxZ = -6,
+                MinZ = 95,
+                MaxZ = 100,
             };
         }
 
@@ -346,9 +366,21 @@ namespace SnowballServer
 
                     tokens[token] = clientId;
 
+                    int baseKey = -1;
+                    foreach(var bridge in bridges)
+                    {
+                        if(bridge.Value.OwnerClientId == -1)
+                        {
+                            baseKey = bridge.Key;
+                            break;
+                        }
+                    }
+
+                    playerBaseKeys[clientId] = baseKey;
+
                     Console.WriteLine($"클라이언트 {clientId} 연결");
 
-                    SendClientInfo(tcpClient, clientId, token);
+                    SendClientInfo(tcpClient, clientId, token, baseKey);
 
                     _ = HandleTcpClient(tcpClient, clientId);
                 }
@@ -459,30 +491,15 @@ namespace SnowballServer
             gunLevels.TryRemove(clientId, out _);
 
 
-            foreach (var snowField in snowFields)
+            if (playerBaseKeys.TryGetValue(clientId, out int baseKey))
             {
-                if (snowField.Value.OwnerClientId == clientId)
-                {
-                    snowField.Value.OwnerClientId = -1;
-                }
-            }
+                snowFields[baseKey].OwnerClientId = -1;
+                bridges[baseKey].OwnerClientId = -1;
+                bridges[baseKey].IsPurchased = false;
+                storages[baseKey].OwnerClientId = -1;
+                storages[baseKey].SnowballCount = 0;
 
-            foreach (var storage in storages)
-            {
-                if (storage.Value.OwnerClientId == clientId)
-                {
-                    storage.Value.OwnerClientId = -1;
-                    storage.Value.SnowballCount = 0;
-                }
-            }
-
-            foreach (var bridge in bridges)
-            {
-                if (bridge.Value.OwnerClientId == clientId)
-                {
-                    bridge.Value.OwnerClientId = -1;
-                    bridge.Value.IsPurchased = false;
-                }
+                playerBaseKeys.TryRemove(clientId, out _);
             }
 
             string tokenToRemove = null;
@@ -622,9 +639,9 @@ namespace SnowballServer
         }
 
 
-        void SendClientInfo(TcpClient client, int clientId, string token)
+        void SendClientInfo(TcpClient client, int clientId, string token, int baseKey)
         {
-            string payload = $"{clientId}:{token}";
+            string payload = $"{clientId}:{token}:{baseKey}";
             byte[] data = Encoding.UTF8.GetBytes(payload);
 
             byte[] packet = new byte[data.Length + 2];
@@ -673,49 +690,44 @@ namespace SnowballServer
 
             playerSpawnPositions[clientId] = clientPositions[clientId];
 
-            foreach (var snowField in snowFields)
+            if (playerBaseKeys.TryGetValue(clientId, out int baseKey))
             {
-                if (snowField.Value.OwnerClientId == -1)
-                {
-                    snowField.Value.OwnerClientId = clientId;
+                snowFields[baseKey].OwnerClientId = clientId;
 
-                    int posX = random.Next(snowField.Value.MinX, snowField.Value.MaxX);
-                    int posZ = random.Next(snowField.Value.MinZ, snowField.Value.MaxZ);
+                int posX = random.Next(snowFields[baseKey].MinX, snowFields[baseKey].MaxX);
+                int posZ = random.Next(snowFields[baseKey].MinZ, snowFields[baseKey].MaxZ);
 
-                    snowField.Value.CurrentSnowPosition = new Vector3(posX, 3, posZ);
+                snowFields[baseKey].CurrentSnowPosition = new Vector3(posX, 3, posZ);
 
-                    BroadcastSnowFieldInfo(clientId, snowField.Value.CurrentSnowPosition);
-                    break;
-                }
+                BroadcastSnowFieldInfo(clientId, baseKey, snowFields[baseKey].CurrentSnowPosition);
+
+                storages[baseKey].OwnerClientId = -1;
+                storages[baseKey].SnowballCount = 0;
+
+                storages[baseKey].OwnerClientId = clientId;
+
+                storages[baseKey].SnowballCount = 0;
+
+                bridges[baseKey].OwnerClientId = clientId;
+                bridges[baseKey].IsPurchased = false;
+
+                BroadcastStorageInfo(clientId, baseKey);
             }
 
-            foreach (var storage in storages)
+            foreach (var field in snowFields)
             {
-                if (storage.Value.OwnerClientId == -1)
-                {
-                    storage.Value.OwnerClientId = clientId;
-
-                    storage.Value.SnowballCount = 0;
-
-                    bridges[storage.Key].OwnerClientId = clientId;
-                    bridges[storage.Key].IsPurchased = false;
-
-                    BroadcastStorageInfo(clientId, storage.Key);
-                    break;
-                }
-            }
-
-            foreach (var field in snowFields.Values)
-            {
-                if (field.OwnerClientId == -1 || field.OwnerClientId == clientId)
+                if (field.Value.OwnerClientId == -1 || field.Value.OwnerClientId == clientId)
                     continue;
 
                 SendSnowFieldToClient(
                     tcpClient,
-                    field.OwnerClientId,
-                    field.CurrentSnowPosition
+                    field.Value.OwnerClientId,
+                    field.Key,
+                    field.Value.CurrentSnowPosition
                 );
             }
+
+
 
             foreach (var bridge in bridges)
             {
@@ -782,10 +794,11 @@ namespace SnowballServer
                 stream.Write(packet, 0, packet.Length);
             }
         }
-        void SendSnowFieldToClient(TcpClient tcpClient, int onwerId, Vector3 pos)
+        void SendSnowFieldToClient(TcpClient tcpClient, int onwerId, int fieldKey, Vector3 pos)
         {
             byte[] data = Encoding.UTF8.GetBytes(
                 $"{onwerId}:" +
+                $"{fieldKey}:" +
                 $"{pos.X}," +
                 $"{pos.Y}," +
                 $"{pos.Z}");
@@ -824,10 +837,11 @@ namespace SnowballServer
                 }
             }
         }
-        void BroadcastSnowFieldInfo(int senderID, Vector3 pos)
+        void BroadcastSnowFieldInfo(int senderID, int fieldKey, Vector3 pos)
         {
             byte[] data = Encoding.UTF8.GetBytes(
                 $"{senderID}:" +
+                $"{fieldKey}:" +
                 $"{pos.X}," +
                 $"{pos.Y}," +
                 $"{pos.Z}");
@@ -1054,26 +1068,16 @@ namespace SnowballServer
                     continue;
                 }
 
-                int storageNum = 0;
-                foreach (var storage in storages)
-                {
 
-                    if (storage.Value.OwnerClientId == client.Key)
-                    {
+                Console.WriteLine($"hp: {playerHps[client.Key]}");
+                Console.WriteLine($"snowballCount: {snowballCounts[client.Key]}");
+                Console.WriteLine($"gunLevel: {gunLevels[client.Key]}");
+                Console.WriteLine($"storage: {storages[playerBaseKeys[client.Key]].SnowballCount}");
+                Console.WriteLine($"playerDead: {playerDead[client.Key]}");
 
-                        Console.WriteLine($"hp: {playerHps[client.Key]}");
-                        Console.WriteLine($"snowballCount: {snowballCounts[client.Key]}");
-                        Console.WriteLine($"gunLevel: {gunLevels[client.Key]}");
-                        Console.WriteLine($"storage: {storage.Value.SnowballCount}");
-                        Console.WriteLine($"playerDead: {playerDead[client.Key]}");
+                storages[playerBaseKeys[client.Key]].SnowballCount = 0;
+                bridges[playerBaseKeys[client.Key]].IsPurchased = false;
 
-
-                        storage.Value.SnowballCount = 0;
-                        storageNum = storage.Key;
-
-                        bridges[storage.Key].IsPurchased = false;
-                    }
-                }
 
                 if (playerHps.TryGetValue(client.Key, out _))
                 {
@@ -1101,7 +1105,7 @@ namespace SnowballServer
                 Console.WriteLine($"hp: {playerHps[client.Key]}" +
                     $"snowballCount: {snowballCounts[client.Key]}" +
                     $"gunLevel: {gunLevels[client.Key]}" +
-                    $"storage: {storages[storageNum].SnowballCount}" +
+                    $"storage: {storages[playerBaseKeys[client.Key]].SnowballCount}" +
                     $"playerDead: {playerDead[client.Key]}");
 
             }
@@ -1125,9 +1129,9 @@ namespace SnowballServer
                 return;
             }
 
-            float dx = bridgePosition.X - playerPosition.X;
+            float dx = bridgePosition[playerBaseKeys[clientId]].X - playerPosition.X;
 
-            float dz = bridgePosition.Z - playerPosition.Z;
+            float dz = bridgePosition[playerBaseKeys[clientId]].Z - playerPosition.Z;
 
             float distance = MathF.Sqrt(dx * dx + dz * dz);
 
@@ -1147,19 +1151,14 @@ namespace SnowballServer
             if (snowballCount < BridgePrice)
                 return;
 
-            foreach (var bridge in bridges)
+            if (playerBaseKeys.TryGetValue(clientId, out int baseKey))
             {
-                if (bridge.Value.OwnerClientId == clientId)
-                {
-                    if (bridge.Value.IsPurchased) return;
+                if (bridges[baseKey].IsPurchased) return;
 
-                    bridge.Value.IsPurchased = true;
-                    snowballCounts[clientId] -= BridgePrice;
+                bridges[baseKey].IsPurchased = true;
+                snowballCounts[clientId] -= BridgePrice;
 
-                    BroadcastBridgePurchaseResult(clientId);
-
-                    return;
-                }
+                BroadcastBridgePurchaseResult(clientId);
             }
         }
 
@@ -1223,9 +1222,9 @@ namespace SnowballServer
                 out Vector3 playerPosition))
                 return;
 
-            float dx = storagePosition.X - playerPosition.X;
+            float dx = storagePosition[playerBaseKeys[clientId]].X - playerPosition.X;
 
-            float dz = storagePosition.Z - playerPosition.Z;
+            float dz = storagePosition[playerBaseKeys[clientId]].Z - playerPosition.Z;
 
             float distance = MathF.Sqrt(dx * dx + dz * dz);
 
@@ -1241,57 +1240,51 @@ namespace SnowballServer
 
             StorageAction action = (StorageAction)buffer[2];
 
-            foreach (var storage in storages)
+            switch (action)
             {
-                if (storage.Value.OwnerClientId == clientId)
-                {
-                    switch (action)
-                    {
-                        case StorageAction.DepositAll:
-                            if (snowballCounts[clientId] <= 0) return;
+                case StorageAction.DepositAll:
+                    if (snowballCounts[clientId] <= 0) return;
 
-                            storage.Value.SnowballCount += snowballCounts[clientId];
-                            snowballCounts[clientId] = 0;
+                    storages[playerBaseKeys[clientId]].SnowballCount += snowballCounts[clientId];
+                    snowballCounts[clientId] = 0;
 
-                            break;
+                    break;
 
-                        case StorageAction.DepositHalf:
-                            if (snowballCounts[clientId] <= 0) return;
+                case StorageAction.DepositHalf:
+                    if (snowballCounts[clientId] <= 0) return;
 
-                            int amountDeposit = snowballCounts[clientId] / 2;
+                    int amountDeposit = snowballCounts[clientId] / 2;
 
-                            storage.Value.SnowballCount += amountDeposit;
-                            snowballCounts[clientId] -= amountDeposit;
+                    storages[playerBaseKeys[clientId]].SnowballCount += amountDeposit;
+                    snowballCounts[clientId] -= amountDeposit;
 
-                            break;
+                    break;
 
-                        case StorageAction.WithdrawAll:
-                            if (storage.Value.SnowballCount <= 0) return;
+                case StorageAction.WithdrawAll:
+                    if (storages[playerBaseKeys[clientId]].SnowballCount <= 0) return;
 
-                            snowballCounts[clientId] += storage.Value.SnowballCount;
-                            storage.Value.SnowballCount = 0;
+                    snowballCounts[clientId] += storages[playerBaseKeys[clientId]].SnowballCount;
+                    storages[playerBaseKeys[clientId]].SnowballCount = 0;
 
-                            break;
+                    break;
 
-                        case StorageAction.WithdrawHalf:
-                            if (storage.Value.SnowballCount <= 0) return;
+                case StorageAction.WithdrawHalf:
+                    if (storages[playerBaseKeys[clientId]].SnowballCount <= 0) return;
 
-                            int amountWithdraw = storage.Value.SnowballCount / 2;
+                    int amountWithdraw = storages[playerBaseKeys[clientId]].SnowballCount / 2;
 
-                            snowballCounts[clientId] += amountWithdraw;
-                            storage.Value.SnowballCount -= amountWithdraw;
+                    snowballCounts[clientId] += amountWithdraw;
+                    storages[playerBaseKeys[clientId]].SnowballCount -= amountWithdraw;
 
-                            break;
-                    }
-
-                    Console.WriteLine("보관: " + storage.Value.SnowballCount);
-                    Console.WriteLine("소유: " + snowballCounts[clientId]);
-
-                    SendStorageActionResult(clientId, storage.Key, storage.Value.SnowballCount, snowballCounts[clientId]);
-
-                    return;
-                }
+                    break;
             }
+
+            Console.WriteLine("보관: " + storages[playerBaseKeys[clientId]].SnowballCount);
+            Console.WriteLine("소유: " + snowballCounts[clientId]);
+
+            SendStorageActionResult(clientId, playerBaseKeys[clientId], storages[playerBaseKeys[clientId]].SnowballCount, snowballCounts[clientId]);
+
+            return;
         }
 
         void HandleGunPurchaseRequest(byte[] buffer, int clientId)
@@ -1306,9 +1299,9 @@ namespace SnowballServer
                 out Vector3 playerPosition))
                 return;
 
-            float dx = gunShopPosition.X - playerPosition.X;
+            float dx = gunShopPosition[playerBaseKeys[clientId]].X - playerPosition.X;
 
-            float dz = gunShopPosition.Z - playerPosition.Z;
+            float dz = gunShopPosition[playerBaseKeys[clientId]].Z - playerPosition.Z;
 
             float distance = MathF.Sqrt(dx * dx + dz * dz);
 
@@ -1535,63 +1528,66 @@ namespace SnowballServer
                 return;
             }
 
-            SnowFieldState playerField = null;
-
-            foreach (var field in snowFields.Values)
-            {
-                if (field.OwnerClientId == clientId)
-                {
-                    playerField = field;
-                    break;
-                }
-            }
-
-            if (playerField == null)
-                return;
-
             if (!clientPositions.TryGetValue(
                 clientId,
                 out Vector3 playerPosition))
                 return;
 
-            float dx = playerField.CurrentSnowPosition.X - playerPosition.X;
 
-            float dz = playerField.CurrentSnowPosition.Z - playerPosition.Z;
+            foreach (var field in snowFields)
+            {
+                if (field.Value.OwnerClientId == clientId)
+                {
+                    float dx = field.Value.CurrentSnowPosition.X - playerPosition.X;
 
-            float distance = MathF.Sqrt(dx * dx + dz * dz);
+                    float dz = field.Value.CurrentSnowPosition.Z - playerPosition.Z;
 
-            if (distance > 2.5f)
-                return;
+                    float distance = MathF.Sqrt(dx * dx + dz * dz);
 
-            int newCount = snowballCounts.AddOrUpdate(
-                clientId,
-                1,
-                (_, current) => current + 1);
+                    if (distance > 3.5f)
+                        return;
 
-            int posX = random.Next(playerField.MinX, playerField.MaxX);
+                    int newCount = snowballCounts.AddOrUpdate(
+                        clientId,
+                        1,
+                        (_, current) => current + 1);
 
-            int posZ = random.Next(playerField.MinZ, playerField.MaxZ);
+                    int posX = random.Next(field.Value.MinX, field.Value.MaxX);
 
-            playerField.CurrentSnowPosition = new Vector3(posX, 3f, posZ);
+                    int posZ = random.Next(field.Value.MinZ, field.Value.MaxZ);
+
+                    field.Value.CurrentSnowPosition = new Vector3(posX, 3f, posZ);
 
 
-            Console.WriteLine(
-        $"Client {clientId} SnowFieldItem 획득 / Snowball {newCount}"
-    );
+                    Console.WriteLine(
+                        $"Client {clientId} SnowFieldItem 획득 / Snowball {newCount}"
+                    );
 
-            BroadcastSnowItemResult(
-                clientId,
-                newCount,
-                playerField.CurrentSnowPosition);
+                    BroadcastSnowItemResult(
+                        clientId,
+                        field.Key,
+                        newCount,
+                        field.Value.CurrentSnowPosition);
+
+
+                    break;
+                }
+            }
+
+
+
+
         }
 
         void BroadcastSnowItemResult(
             int winnerClientId,
+            int fieldKey,
             int snowballCount,
             Vector3 pos)
         {
             string payload =
                 $"{winnerClientId}:" +
+                $"{fieldKey}:" +
                 $"{snowballCount}:" +
                 $"{pos.X}," +
                 $"{pos.Y}," +

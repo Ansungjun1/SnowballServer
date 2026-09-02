@@ -10,7 +10,6 @@ public class Loding : MonoBehaviour
     public void OnPlay()
     {
         LM.SetPlay();
-        FindObjectOfType<NetworkClient>().SetCharacter();
 
         Chatting.SetActive(true);
     }
