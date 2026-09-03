@@ -16,17 +16,29 @@ public class CameraManager : MonoBehaviour
     private float yaw;
     private float pitch = 20f;
 
+    private bool isSpectating;
+
     private void LateUpdate()
     {
         if (target == null)
             return;
 
-        // 마우스로 카메라 회전
-        yaw += Input.GetAxis("Mouse X") * mouseSensitivity;
-        pitch -= Input.GetAxis("Mouse Y") * mouseSensitivity;
+        if (isSpectating)
+        {
+            // 상대에게 서버에서 적용된 yaw를 그대로 사용
+            yaw = target.eulerAngles.y;
+        }
+        else
+        {
+            // 마우스로 카메라 회전
+            yaw += Input.GetAxis("Mouse X") * mouseSensitivity;
+            pitch -= Input.GetAxis("Mouse Y") * mouseSensitivity;
 
-        // 너무 위/아래로 뒤집히지 않도록 제한
-        pitch = Mathf.Clamp(pitch, -10f, 60f);
+            // 너무 위/아래로 뒤집히지 않도록 제한
+            pitch = Mathf.Clamp(pitch, -10f, 60f);
+        }
+
+
 
         Quaternion cameraRotation =
             Quaternion.Euler(pitch, yaw, 0f);
@@ -41,7 +53,11 @@ public class CameraManager : MonoBehaviour
         transform.position = cameraPosition;
         transform.LookAt(lookPosition);
 
-        RotateBody();
+        // 내 캐릭터일 때만 캐릭터 회전
+        if (!isSpectating)
+        {
+            RotateBody();
+        }
     }
 
     private void RotateBody()
@@ -60,6 +76,15 @@ public class CameraManager : MonoBehaviour
     public void SetTarget(Transform target)
     {
         this.target = target;
+        isSpectating = false;
+
+        yaw = target.eulerAngles.y;
+    }
+
+    public void SetSpectateTarget(Transform target)
+    {
+        this.target = target;
+        isSpectating = true;
 
         yaw = target.eulerAngles.y;
     }

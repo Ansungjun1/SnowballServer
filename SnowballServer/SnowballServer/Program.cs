@@ -42,6 +42,13 @@ namespace SnowballServer
         }
     }
 
+    class CoreState
+    {
+        public int OwnerClientId;
+        public int Hp;
+        public Vector3 Position;
+    }
+
     class BridgeState
     {
         public int OwnerClientId;
@@ -143,6 +150,12 @@ namespace SnowballServer
         BridgePurchaseRequest = 0x22,
         BridgePurchaseResult = 0x23,
         BridgeOtherPlayerJoin = 0x24,
+
+        CoreHitRequest = 0x25,
+        CoreOutPlayer = 0x26,
+        CoreHitResult = 0x27,
+
+        WinnerPlayer = 0x28,
     }
 
     enum UdpPacketType : byte
@@ -189,6 +202,10 @@ namespace SnowballServer
 
         private ConcurrentDictionary<int, Vector3> bridgePosition = new ConcurrentDictionary<int, Vector3>();
 
+        private ConcurrentDictionary<int, CoreState> cores = new ConcurrentDictionary<int, CoreState>();
+
+        private ConcurrentDictionary<int, bool> playerEliminated = new ConcurrentDictionary<int, bool>();
+
         private const int BridgePrice = 5;
 
         private int nextSnowballId = 0;
@@ -229,10 +246,15 @@ namespace SnowballServer
 
         public void Connect()
         {
+            InitializeCores();
             InitializeSnowField();
             InitializeGunPrice();
             InitializeStorages();
             InitializeBridges();
+            InitializeEliminated();
+            InitializePlayerSpawnPos();
+
+            gameState = GameState.Waiting;
 
             // TCP 시작
             StartTcpServer(9050);
@@ -259,7 +281,36 @@ namespace SnowballServer
             //ThreadPool.QueueUserWorkItem(ListenForUdpRequests);
             _ = ListenForUdpRequests();
         }
+        void InitializePlayerSpawnPos()
+        {
+            playerSpawnPositions[0] = new Vector3(5, 6, 5);
+            playerSpawnPositions[1] = new Vector3(93, 6, 85);
+            playerSpawnPositions[2] = new Vector3(13, 6, 178);
+            playerSpawnPositions[3] = new Vector3(-57, 6, 95);
+        }
+        void InitializeEliminated()
+        {
+            for (int i = 0; i < 4; i++)
+            {
+                playerEliminated[i] = true;
+            }
+        }
+        void InitializeCores()
+        {
+            for(int i = 0; i < 4; i++)
+            {
+                cores[i] = new CoreState
+                {
+                    OwnerClientId = -1,
+                    Hp = 5,
+                };
+            }
 
+            cores[0].Position = new Vector3(5, 0, -16);
+            cores[1].Position = new Vector3(114, 0, 85);
+            cores[2].Position = new Vector3(13, 0, 200);
+            cores[3].Position = new Vector3(-78, 0, 95);
+        }
         void InitializeBridges()
         {
             for (int i = 0; i < 4; i++)
@@ -360,6 +411,12 @@ namespace SnowballServer
                 {
                     TcpClient tcpClient = await tcpServer.AcceptTcpClientAsync();
 
+                    if (gameState != GameState.Waiting)
+                    {
+                        tcpClient.Close();
+                        continue;
+                    }
+
                     int clientId = Interlocked.Increment(ref nextClientId);
 
                     string token = Guid.NewGuid().ToString("N");
@@ -374,6 +431,12 @@ namespace SnowballServer
                             baseKey = bridge.Key;
                             break;
                         }
+                    }
+
+                    if (baseKey == -1)
+                    {
+                        tcpClient.Close();
+                        continue;
                     }
 
                     playerBaseKeys[clientId] = baseKey;
@@ -498,6 +561,8 @@ namespace SnowballServer
                 bridges[baseKey].IsPurchased = false;
                 storages[baseKey].OwnerClientId = -1;
                 storages[baseKey].SnowballCount = 0;
+
+                playerEliminated[baseKey] = true;
 
                 playerBaseKeys.TryRemove(clientId, out _);
             }
@@ -632,6 +697,10 @@ namespace SnowballServer
                     HandleBridgePurchaseRequest(packet, clientId);
                     break;
 
+                case (byte)TcpPacketType.CoreHitRequest:
+                    HandleCoreHitRequest(packet, clientId);
+                    break;
+
                 default:
                     Console.WriteLine("알 수 없는 TCP 패킷 타입: " + packetType);
                     break;
@@ -688,8 +757,6 @@ namespace SnowballServer
             gunLevels[clientId] = 0;
             snowballCounts[clientId] = 0;
 
-            playerSpawnPositions[clientId] = clientPositions[clientId];
-
             if (playerBaseKeys.TryGetValue(clientId, out int baseKey))
             {
                 snowFields[baseKey].OwnerClientId = clientId;
@@ -710,6 +777,9 @@ namespace SnowballServer
 
                 bridges[baseKey].OwnerClientId = clientId;
                 bridges[baseKey].IsPurchased = false;
+
+                cores[baseKey].OwnerClientId = clientId;
+                cores[baseKey].Hp = 5;
 
                 BroadcastStorageInfo(clientId, baseKey);
             }
@@ -1026,19 +1096,27 @@ namespace SnowballServer
 
             foreach (var client in udpClients)
             {
-                if (tcpClients[client.Key].Connected && client.Key != senderID)
-                {
-                    try
-                    {
-                        udpServer.Send(packet, packet.Length, udpClients[client.Key]);
-                        //Debug.Log("위치 데이터 전송 완료: " + udpClients[client.Key]);
-                        //Debug.Log("위치 데이터: " + packet[0] + " " + packet[1] + " " + packet[2]);
-                    }
-                    catch (Exception e)
-                    {
-                        //Debug.Log("클라이언트에게 데이터 보내기 실패: " + e);
-                    }
+                if (client.Key == senderID)
+                    continue;
 
+
+                if (!tcpClients.TryGetValue(client.Key, out TcpClient tcpClient))
+                    continue;
+
+                if (!tcpClient.Connected)
+                    continue;
+
+                try
+                {
+                    udpServer.Send(
+                        packet,
+                        packet.Length,
+                        client.Value
+                    );
+                }
+                catch (Exception e)
+                {
+                    Console.WriteLine($"UDP 전송 실패: {e}");
                 }
             }
         }
@@ -1078,6 +1156,7 @@ namespace SnowballServer
                 storages[playerBaseKeys[client.Key]].SnowballCount = 0;
                 bridges[playerBaseKeys[client.Key]].IsPurchased = false;
 
+                playerEliminated[playerBaseKeys[client.Key]] = false;
 
                 if (playerHps.TryGetValue(client.Key, out _))
                 {
@@ -1112,6 +1191,142 @@ namespace SnowballServer
             BroadcastGameStart();
         }
 
+        void HandleCoreHitRequest(byte[] buffer, int clientId)
+        {
+            if (playerDead.TryGetValue(clientId, out bool isDead) && isDead)
+            {
+                return;
+            }
+
+            if (gameState != GameState.Playing)
+                return;
+
+            if (!clientPositions.TryGetValue(
+                clientId,
+                out Vector3 playerPosition))
+            {
+                return;
+            }
+
+            int messageLength = buffer[1];
+
+            string data = Encoding.UTF8.GetString(buffer, 2, messageLength);
+
+            string[] parts = data.Split(':', 2);
+
+            if (parts.Length != 2)
+                return;
+
+            if (!int.TryParse(parts[0], out int ownerId) ||
+                !int.TryParse(parts[1], out int targetBaseKey))
+            {
+                return;
+            }
+
+            if (ownerId == clientId) return;
+
+            if (!cores.TryGetValue(
+                targetBaseKey,
+                out CoreState targetCore))
+            {
+                return;
+            }
+
+            if (targetCore.OwnerClientId != ownerId)
+            {
+                return;
+            }
+
+
+            float dx = cores[targetBaseKey].Position.X - playerPosition.X;
+
+            float dz = cores[targetBaseKey].Position.Z - playerPosition.Z;
+
+            float distance = MathF.Sqrt(dx * dx + dz * dz);
+
+            if (distance > 4f)
+            {
+                return;
+
+            }
+
+            if (playerBaseKeys.TryGetValue(clientId, out int baseKey))
+            {
+                if (baseKey == targetBaseKey) return;
+
+                if (playerEliminated[targetBaseKey])
+                    return;
+
+                cores[targetBaseKey].Hp -= 1;
+
+                if (cores[targetBaseKey].Hp <= 0)
+                {
+                    //탈락
+                    playerEliminated[targetBaseKey] = true;
+
+                    int eliminatedNum = 0;
+                    foreach(var eliminated in playerEliminated)
+                    {
+                        if (!eliminated.Value)
+                        {
+                            eliminatedNum++;
+                        }
+                    }
+
+                    if(eliminatedNum == 1)
+                    {
+                        BroadcastWinnerPlayer(clientId, baseKey);
+                    }
+                    else
+                    {
+                        SendCoreDeadResult(clientId);
+                    }
+
+                    BroadcastCoreOutPlayer(ownerId, targetBaseKey);//플레이어 탈락
+                }
+                else
+                {
+                    BroadcastCoreHitResult(ownerId, targetBaseKey, cores[targetBaseKey].Hp, clientId);//core 줄이기
+                    SendCoreDeadResult(clientId);
+                }
+            }
+        }
+        void SendCoreDeadResult(int targetId)
+        {
+            playerDead[targetId] = true;
+
+            gunLevels[targetId] = 0;
+            BroadcastGunRemove(targetId);
+
+            if (snowballCounts.TryGetValue(targetId, out int snowballCount))
+            {
+                int dropCount = snowballCount / 2;
+
+                if (dropCount > 0)
+                {
+                    int dropId = ++nextDropSnowballId;
+
+                    DroppedSnowballState drop = new DroppedSnowballState
+                    {
+                        Id = dropId,
+                        Position = clientPositions[targetId],
+                        Count = dropCount
+                    };
+
+                    droppedSnowballs[dropId] = drop;
+
+                    BroadcastDroppedSnowballs(
+                        drop.Id,
+                        drop.Position,
+                        drop.Count
+                    );
+                }
+
+                snowballCounts[targetId] = 0;
+            }
+
+            _ = RespawnPlayer(targetId);
+        }
         void HandleBridgePurchaseRequest(byte[] buffer, int clientId)
         {
             if (playerDead.TryGetValue(clientId, out bool isDead) && isDead)
@@ -1428,6 +1643,74 @@ namespace SnowballServer
             }
         }
 
+        void BroadcastCoreHitResult(int ownerId, int targetBaseKey, int hp, int deadClientId)
+        {
+            byte[] data = Encoding.UTF8.GetBytes(
+                $"{ownerId}:" +
+                $"{targetBaseKey}:" +
+                $"{hp}:" +
+                $"{deadClientId}");
+
+            byte[] packet = new byte[data.Length + 2];
+
+            packet[0] = (byte)TcpPacketType.CoreHitResult;
+            packet[1] = (byte)data.Length;
+
+            Array.Copy(data, 0, packet, 2, data.Length);
+
+            foreach (var client in tcpClients)
+            {
+                if (!client.Value.Connected)
+                    continue;
+
+                NetworkStream stream = client.Value.GetStream();
+                stream.Write(packet, 0, packet.Length);
+            }
+        }
+        void BroadcastCoreOutPlayer(int ownerId, int targetBaseKey)
+        {
+            byte[] data = Encoding.UTF8.GetBytes(
+                $"{ownerId}:" +
+                $"{targetBaseKey}");
+
+            byte[] packet = new byte[data.Length + 2];
+
+            packet[0] = (byte)TcpPacketType.CoreOutPlayer;
+            packet[1] = (byte)data.Length;
+
+            Array.Copy(data, 0, packet, 2, data.Length);
+
+            foreach (var client in tcpClients)
+            {
+                if (!client.Value.Connected)
+                    continue;
+
+                NetworkStream stream = client.Value.GetStream();
+                stream.Write(packet, 0, packet.Length);
+            }
+        }
+        void BroadcastWinnerPlayer(int ownerId, int targetBaseKey)
+        {
+            byte[] data = Encoding.UTF8.GetBytes(
+                $"{ownerId}:" +
+                $"{targetBaseKey}");
+
+            byte[] packet = new byte[data.Length + 2];
+
+            packet[0] = (byte)TcpPacketType.WinnerPlayer;
+            packet[1] = (byte)data.Length;
+
+            Array.Copy(data, 0, packet, 2, data.Length);
+
+            foreach (var client in tcpClients)
+            {
+                if (!client.Value.Connected)
+                    continue;
+
+                NetworkStream stream = client.Value.GetStream();
+                stream.Write(packet, 0, packet.Length);
+            }
+        }
         void BroadcastBridgePurchaseResult(int clientId)
         {
             byte[] data = Encoding.UTF8.GetBytes(
@@ -1981,7 +2264,7 @@ namespace SnowballServer
             await Task.Delay(3000);
 
             if (!playerSpawnPositions.TryGetValue(
-                clientId,
+                playerBaseKeys[clientId],
                 out Vector3 spawnPosition))
             {
                 return;

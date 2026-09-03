@@ -9,6 +9,7 @@ TagManager:
   - Storage
   - Central
   - Bridge
+  - Core
   layers:
   - Default
   - TransparentFX

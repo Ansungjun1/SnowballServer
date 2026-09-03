@@ -87,5 +87,11 @@ public class PlayerState : MonoBehaviour
         {
             FindObjectOfType<NetworkClient>().RequestPurchaseBridge();
         }
+
+        CoreState core = other.GetComponent<CoreState>();
+        if (core != null)
+        {
+            FindObjectOfType<NetworkClient>().RequestCoreHit(core.ownerId, core.baseKey);
+        }
     }
 }

@@ -70,6 +70,12 @@ enum TcpPacketType : byte
     BridgePurchaseRequest = 0x22,
     BridgePurchaseResult = 0x23,
     BridgeOtherPlayerJoin = 0x24,
+
+    CoreHitRequest = 0x25,
+    CoreOutPlayer = 0x26,
+    CoreHitResult = 0x27,
+
+    WinnerPlayer = 0x28,
 }
 
 enum UdpPacketType : byte
@@ -131,10 +137,13 @@ public class NetworkClient : MonoBehaviour
 
     private Dictionary<int, StorageState> storages = new Dictionary<int, StorageState>();
     private Dictionary<int, BridgeState> bridges = new Dictionary<int, BridgeState>();
+    private Dictionary<int, CoreState> cores = new Dictionary<int, CoreState>();
 
     private const int BridgePrice = 5;
 
     private GameState gameState = GameState.Waiting;
+    private bool isEliminated = false;
+
     private void Start()
     {
         System.Random rand = new System.Random();
@@ -143,6 +152,7 @@ public class NetworkClient : MonoBehaviour
         InitializeStorages();
         InitializeBridges();
         InitializedField();
+        InitializedCores();
     }
     public void Connect()
     {
@@ -176,7 +186,7 @@ public class NetworkClient : MonoBehaviour
             return;
 
 
-        if (!isChatting)
+        if (!isChatting && !isEliminated)
         {
             if (Input.GetKey(KeyCode.W)) character.GetComponent<PlayerMovement>().MovePlayer(KeyCode.W);
             else if (Input.GetKeyUp(KeyCode.W)) character.GetComponent<PlayerMovement>().MovePlayer("W");
@@ -242,6 +252,17 @@ public class NetworkClient : MonoBehaviour
                 if(state != null && !state.IsDead)
                     character.GetComponent<PlayerMovement>().SetMovePlayer();
             }
+        }
+    }
+
+    void InitializedCores()
+    {
+        CoreState[] coreObjects =
+FindObjectsOfType<CoreState>();
+
+        foreach (CoreState core in coreObjects)
+        {
+            cores[core.baseKey] = core;
         }
     }
     void InitializeStorages()
@@ -559,6 +580,18 @@ public class NetworkClient : MonoBehaviour
             case (byte)TcpPacketType.BridgeOtherPlayerJoin:
                 HandleBridgeOtherPlayerJoin(packet);
                 break;
+
+            case (byte)TcpPacketType.CoreOutPlayer:
+                HandleCoreOutPlayer(packet);
+                break;
+
+            case (byte)TcpPacketType.CoreHitResult:
+                HandleCoreHitResult(packet);
+                break;
+
+            case (byte)TcpPacketType.WinnerPlayer:
+                HandleWinnerPlayer(packet);
+                break;
                 
             default:
                 Debug.Log("알 수 없는 패킷 타입:" + packetType);
@@ -766,6 +799,16 @@ public class NetworkClient : MonoBehaviour
             }
 
             bridge.ownerId = ownerId;
+
+            if (!cores.TryGetValue(
+                storageKey,
+                out CoreState core))
+            {
+                Debug.Log("없음");
+                return;
+            }
+
+            core.ownerId = ownerId;
         });
     }
 
@@ -896,6 +939,148 @@ public class NetworkClient : MonoBehaviour
         });
     }
 
+    void HandleWinnerPlayer(byte[] buffer)
+    {
+        int messageLength = buffer[1];
+
+        string data =
+            Encoding.UTF8.GetString(
+                buffer,
+                2,
+                messageLength
+            );
+
+        string[] parts = data.Split(':');
+
+        if (parts.Length != 2)
+            return;
+
+        if (!int.TryParse(parts[0], out int targetId) ||
+            !int.TryParse(parts[1], out int baseKey))
+        {
+            return;
+        }
+
+        UnityMainThreadDispatcher.Enqueue(() =>
+        {
+            //gameState = GameState.Finished;
+
+            if (targetId == clientId)
+            {
+                Debug.Log("승리!");
+            }
+            else
+            {
+                Debug.Log($"Player {targetId} 승리!");
+            }
+        });
+    }
+    void HandleCoreHitResult(byte[] buffer)
+    {
+        int messageLength = buffer[1];
+
+        string data =
+            Encoding.UTF8.GetString(
+                buffer,
+                2,
+                messageLength
+            );
+
+        string[] parts = data.Split(':');
+
+        if (parts.Length != 4)
+            return;
+
+        if (!int.TryParse(parts[0], out int targetId) ||
+            !int.TryParse(parts[1], out int targetKey) ||
+            !int.TryParse(parts[2], out int hp) ||
+            !int.TryParse(parts[3], out int deadClientId))
+        {
+            return;
+        }
+
+        UnityMainThreadDispatcher.Enqueue(() =>
+        {
+            cores[targetKey].hp = hp;
+            cores[targetKey].coreObjects[hp].SetActive(false);
+
+            GameObject targetPlayer;
+
+            if(clientId == deadClientId)
+            {
+                targetPlayer = character;
+            }
+            else
+            {
+                otherPlayers.TryGetValue(deadClientId, out targetPlayer);
+            }
+
+            PlayerState state = targetPlayer.GetComponent<PlayerState>();
+
+            if (state != null)
+            {
+                state.SetHp(0);
+            }
+        });
+    }
+    void HandleCoreOutPlayer(byte[] buffer)
+    {
+        int messageLength = buffer[1];
+
+        string data =
+            Encoding.UTF8.GetString(
+                buffer,
+                2,
+                messageLength
+            );
+
+        string[] parts = data.Split(':');
+
+        if (parts.Length != 2)
+            return;
+
+        if (!int.TryParse(parts[0], out int targetId) ||
+            !int.TryParse(parts[1], out int targetKey))
+        {
+            return;
+        }
+
+        UnityMainThreadDispatcher.Enqueue(() =>
+        {
+            cores[targetKey].hp = 0;
+
+            foreach (GameObject obj in cores[targetKey].coreObjects)
+                obj.SetActive(false);
+
+            GameObject targetPlayer;
+
+            foreach (var player in otherPlayers)
+            {
+                Debug.Log($"otherPlayers key: {player.Key}");
+            }
+
+            if (targetId == clientId)
+            {
+                targetPlayer = character;
+
+                isEliminated = true;
+
+                foreach (var player in otherPlayers)
+                {
+                    
+                    Camera.main.GetComponent<CameraManager>().SetSpectateTarget(player.Value.transform);
+                    break;
+                }
+            }
+            else
+            {
+                otherPlayers.TryGetValue(targetId, out targetPlayer);
+            }
+
+            targetPlayer.SetActive(false);
+
+        });
+    }
     void HandleBridgeOtherPlayerJoin(byte[] buffer)
     {
         int messageLength = buffer[1];
@@ -981,7 +1166,13 @@ public class NetworkClient : MonoBehaviour
         out BridgeState bridge))
         {
             bridge.ownerId = ownerId;
-            return;
+        }
+
+        if (cores.TryGetValue(
+            bridgeKey,
+            out CoreState core))
+        {
+            core.ownerId = ownerId;
         }
     }
 
@@ -1712,6 +1903,24 @@ public class NetworkClient : MonoBehaviour
 
         packet[0] = (byte)TcpPacketType.GameStartRequest;
         packet[1] = 0;
+
+        stream.Write(packet, 0, packet.Length);
+    }
+
+    public void RequestCoreHit(int ownerId, int baseKey)
+    {
+        if (ownerId == clientId) return;
+
+        byte[] data = Encoding.UTF8.GetBytes(
+            $"{ownerId}:" +
+            $"{baseKey}");
+
+        byte[] packet = new byte[data.Length + 2];
+
+        packet[0] = (byte)TcpPacketType.CoreHitRequest;
+        packet[1] = (byte)data.Length;
+
+        Array.Copy(data, 0, packet, 2, data.Length);
 
         stream.Write(packet, 0, packet.Length);
     }
