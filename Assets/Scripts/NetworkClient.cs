@@ -98,6 +98,9 @@ public class NetworkClient : MonoBehaviour
     public TMP_InputField input_Chat_text;
     public Transform[] SpawnPos;
 
+    public GameObject WinnerPanel;
+    public TextMeshProUGUI WinnerText;
+
     private Dictionary<int, DroppedSnowItem> droppedSnowItems = new Dictionary<int, DroppedSnowItem>();
 
     private bool isRunning;
@@ -144,7 +147,7 @@ public class NetworkClient : MonoBehaviour
     private GameState gameState = GameState.Waiting;
     private bool isEliminated = false;
 
-    private void Start()
+    public void Connect()
     {
         System.Random rand = new System.Random();
         ChoosePrefab = rand.Next(0, Prefab.Length);
@@ -153,9 +156,7 @@ public class NetworkClient : MonoBehaviour
         InitializeBridges();
         InitializedField();
         InitializedCores();
-    }
-    public void Connect()
-    {
+
         isRunning = true;
 
         ConnectToServer(ServerIP, tcpPort);
@@ -220,14 +221,13 @@ public class NetworkClient : MonoBehaviour
             else if (Input.GetKeyDown(KeyCode.Y)) StorageActionRequest((byte)StorageAction.WithdrawHalf);
 
 
-            if (Input.GetKeyDown(KeyCode.Escape) && gameState == GameState.Waiting) GameStartRequest();
+            if (Input.GetKeyDown(KeyCode.Space) && gameState == GameState.Waiting) GameStartRequest();
         }
         else
         {
             if (Input.GetKeyDown(KeyCode.Return))
                 HandlePlayerChat();
         }
-
 
         positionSendTimer += Time.deltaTime;
 
@@ -306,7 +306,7 @@ FindObjectsOfType<CoreState>();
     }
     void SendPositionToServer(Vector3 position)
     {
-        if (!sessionReady) return;
+        if (!sessionReady || gameState == GameState.Finished) return;
 
         positionSequence++;
 
@@ -963,16 +963,33 @@ FindObjectsOfType<CoreState>();
 
         UnityMainThreadDispatcher.Enqueue(() =>
         {
-            //gameState = GameState.Finished;
+            gameState = GameState.Finished;
 
             if (targetId == clientId)
             {
-                Debug.Log("½Â¸®!");
+
+                WinnerText.text = "½Â¸®!";
             }
             else
             {
-                Debug.Log($"Player {targetId} ½Â¸®!");
+                if (otherPlayers.TryGetValue(
+                    targetId,
+                    out GameObject winner))
+                {
+                    WinnerText.text =
+                        winner.GetComponent<PlayerState>().nameText.text
+                        + " ½Â¸®";
+                }
+                else
+                {
+                    WinnerText.text = "°ÔÀÓ Á¾·á";
+                }
             }
+
+            Cursor.lockState = CursorLockMode.None;
+            Cursor.visible = true;
+
+            WinnerPanel.SetActive(true);
         });
     }
     void HandleCoreHitResult(byte[] buffer)
@@ -1481,11 +1498,11 @@ FindObjectsOfType<CoreState>();
 
         UnityMainThreadDispatcher.Enqueue(() =>
         {
+            SnowFieldInfo(ownerId, fieldKey, new Vector3(x, y, z));
+
             if (ownerId == clientId)
             {
                 mySnowballCount = snowballCount;
-
-                SnowFieldInfo(ownerId, fieldKey, new Vector3(x, y, z));
 
                 Debug.Log(
                     $"´«µ¢ÀÌ È¹µæ! ÇöÀç °³¼ö: {mySnowballCount}"
@@ -1923,6 +1940,153 @@ FindObjectsOfType<CoreState>();
         Array.Copy(data, 0, packet, 2, data.Length);
 
         stream.Write(packet, 0, packet.Length);
+    }
+    public void OnClickExitMatch()
+    {
+        DisconnectFromServer();
+        ResetClientState();
+
+        // ·Îºñ Scene ÀÌµ¿
+        // SceneManager.LoadScene("Lobby");
+    }
+    void DisconnectFromServer()
+    {
+        isRunning = false;
+        sessionReady = false;
+
+        try
+        {
+            stream?.Close();
+        }
+        catch { }
+
+        try
+        {
+            tcpServer?.Close();
+        }
+        catch { }
+
+        try
+        {
+            udpClient?.Close();
+        }
+        catch { }
+
+        stream = null;
+        tcpServer = null;
+        udpClient = null;
+    }
+    void ResetClientState()
+    {
+        // ±âº» Session
+        clientId = -1;
+        baseKey = -1;
+        sessionToken = null;
+        sessionReady = false;
+
+        gameState = GameState.Waiting;
+
+        isChatting = false;
+        isEliminated = false;
+
+        positionSequence = 0;
+        positionSendTimer = 0f;
+
+        mySnowballCount = 0;
+
+        // À§Ä¡ µ¿±âÈ­ µ¥ÀÌÅÍ
+        lastReceivedPositionSequence.Clear();
+        targetPositions.Clear();
+        targetYaws.Clear();
+
+        // ÃÑ »óÅÂ
+        gunLevels.Clear();
+
+        // »ó´ë ÇÃ·¹ÀÌ¾î
+        foreach (var player in otherPlayers)
+        {
+            if (player.Value != null)
+                Destroy(player.Value);
+        }
+
+        otherPlayers.Clear();
+
+        // ³¯¾Æ°¡°í ÀÖ´Â ´«µ¢ÀÌ
+        foreach (var snowball in snowballObjects)
+        {
+            if (snowball.Value != null)
+                Destroy(snowball.Value);
+        }
+
+        snowballObjects.Clear();
+
+        // ¶³¾îÁø ´«µ¢ÀÌ
+        foreach (var drop in droppedSnowItems)
+        {
+            if (drop.Value != null)
+                Destroy(drop.Value.gameObject);
+        }
+
+        droppedSnowItems.Clear();
+
+        if (character != null)
+        {
+            Destroy(character);
+            character = null;
+        }
+
+        ResetSnowFields();
+        ResetStorages();
+        ResetBridges();
+        ResetCores();
+
+        WinnerPanel.SetActive(false);
+    }
+    void ResetSnowFields()
+    {
+        foreach (var field in snowFieldItems)
+        {
+            if (field.Value == null)
+                continue;
+
+            SnowItem snowItem =
+                field.Value.GetComponent<SnowItem>();
+
+            if (snowItem != null)
+                snowItem.ownerId = -1;
+
+            field.Value.SetActive(false);
+        }
+    }
+    void ResetStorages()
+    {
+        foreach (var storage in storages)
+        {
+            storage.Value.ownerId = -1;
+            storage.Value.snowballCount = 0;
+        }
+    }
+    void ResetBridges()
+    {
+        foreach (var bridge in bridges)
+        {
+            bridge.Value.ownerId = -1;
+            bridge.Value.gameObject.SetActive(false);
+        }
+    }
+    void ResetCores()
+    {
+        foreach (var core in cores)
+        {
+            core.Value.ownerId = -1;
+            core.Value.hp = 5;
+
+            foreach (GameObject obj in core.Value.coreObjects)
+            {
+                if (obj != null)
+                    obj.SetActive(true);
+            }
+        }
     }
     void OnApplicationQuit()
     {

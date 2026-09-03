@@ -13,4 +13,11 @@ public class Loding : MonoBehaviour
 
         Chatting.SetActive(true);
     }
+
+    public void OffPlay()
+    {
+        LM.ReturnRobby();
+
+        Chatting.SetActive(false);
+    }
 }

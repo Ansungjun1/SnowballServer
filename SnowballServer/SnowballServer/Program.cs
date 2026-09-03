@@ -283,10 +283,10 @@ namespace SnowballServer
         }
         void InitializePlayerSpawnPos()
         {
-            playerSpawnPositions[0] = new Vector3(5, 6, 5);
-            playerSpawnPositions[1] = new Vector3(93, 6, 85);
-            playerSpawnPositions[2] = new Vector3(13, 6, 178);
-            playerSpawnPositions[3] = new Vector3(-57, 6, 95);
+            playerSpawnPositions[0] = new Vector3(5, 15, 5);
+            playerSpawnPositions[1] = new Vector3(93, 15, 85);
+            playerSpawnPositions[2] = new Vector3(13, 15, 178);
+            playerSpawnPositions[3] = new Vector3(-57, 15, 95);
         }
         void InitializeEliminated()
         {
@@ -1275,7 +1275,11 @@ namespace SnowballServer
 
                     if(eliminatedNum == 1)
                     {
+                        gameState = GameState.Finished;
+
                         BroadcastWinnerPlayer(clientId, baseKey);
+
+                        _ = FinishMatch();
                     }
                     else
                     {
@@ -1290,6 +1294,81 @@ namespace SnowballServer
                     SendCoreDeadResult(clientId);
                 }
             }
+        }
+        async Task FinishMatch()
+        {
+            gameState = GameState.Finished;
+
+            await Task.Delay(5000);
+
+            ClearPlayers();
+            ResetMatch();
+        }
+        void ResetMatch()
+        {
+            gameState = GameState.Waiting;
+
+            centralSnowballCount = 0;
+            centralSnowballTimer = 0f;
+
+            droppedSnowballs.Clear();
+
+            foreach (var core in cores)
+            {
+                core.Value.OwnerClientId = -1;
+                core.Value.Hp = 5;
+            }
+
+            foreach (var field in snowFields)
+            {
+                field.Value.OwnerClientId = -1;
+
+                // CurrentSnowPosition도
+                // 필요하면 최초 위치/랜덤 위치로 초기화
+            }
+
+            foreach (var bridge in bridges)
+            {
+                bridge.Value.OwnerClientId = -1;
+                bridge.Value.IsPurchased = false;
+            }
+
+            foreach (var storage in storages)
+            {
+                storage.Value.OwnerClientId = -1;
+                storage.Value.SnowballCount = 0;
+            }
+
+            for (int i = 0; i < 4; i++)
+            {
+                playerEliminated[i] = true;
+            }
+
+            Console.WriteLine("Match Reset");
+        }
+        void ClearPlayers()
+        {
+            foreach (var client in tcpClients)
+            {
+                try
+                {
+                    client.Value.Close();
+                }
+                catch { }
+            }
+
+            tcpClients.Clear();
+            udpClients.Clear();
+
+            tokens.Clear();
+
+            clientPositions.Clear();
+            playerBaseKeys.Clear();
+
+            playerHps.Clear();
+            snowballCounts.Clear();
+            gunLevels.Clear();
+            playerDead.Clear();
         }
         void SendCoreDeadResult(int targetId)
         {

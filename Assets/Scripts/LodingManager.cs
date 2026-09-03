@@ -9,7 +9,6 @@ public class LodingManager : MonoBehaviour
     public GameObject HomeScene;
     public GameObject NameScene;
     public GameObject WaitImage;
-    public GameObject PlayMap;
     public TextMeshProUGUI Name_Text;
 
     public TextMeshProUGUI Home_Name;
@@ -55,9 +54,15 @@ public class LodingManager : MonoBehaviour
     public void SetPlay()
     {
         WaitImage.SetActive(false);
-        PlayMap.SetActive(true);
 
         Cursor.lockState = CursorLockMode.Locked;
         Cursor.visible = false;
+    }
+    public void ReturnRobby()
+    {
+        HomeScene.SetActive(true);
+
+        Cursor.lockState = CursorLockMode.None;
+        Cursor.visible = true;
     }
 }
