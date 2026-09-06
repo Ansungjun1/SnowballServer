@@ -7,7 +7,7 @@ using UnityEngine.UIElements;
 
 public class PlayerMovement : MonoBehaviour
 {
-    public float walkSpeed = 6f;
+    private float walkSpeed = 6f;
 
     float moveX = 0f;
     float moveZ = 0f;

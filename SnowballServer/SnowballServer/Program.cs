@@ -143,6 +143,7 @@ namespace SnowballServer
 
         GameStartRequest = 0x18,
         GameStart = 0x19,
+        GameFinished = 0x1A,
 
         CentralSnowball = 0x20,
         CentralSnowballResult = 0x21,
@@ -212,8 +213,6 @@ namespace SnowballServer
         private int nextDropSnowballId = 0;
         private int nextClientId = 0;
 
-        private readonly Random random = new Random();
-
         private GameState gameState = GameState.Waiting;
 
         private int centralSnowballCount = 0;
@@ -224,6 +223,12 @@ namespace SnowballServer
 
         private Vector3 centralSnowballPosition = new Vector3(11, 0, 91.8f);
 
+        private readonly object centralSnowballLock = new object();
+        private readonly object playerStateLock = new object();
+        private readonly object baseKeyLock = new object();
+        private readonly object snowFieldLock = new object();
+        private ConcurrentDictionary<TcpClient, object> tcpSendLocks = new();
+
         public async Task StartGameLoop()
         {
             const float tickRate = 20f;
@@ -231,16 +236,24 @@ namespace SnowballServer
 
             int delayMs = (int)(1000f / tickRate);
 
-            while (isRunning)
+            try
             {
-                UpdateSnowballs(deltaTime);
-
-                if (gameState == GameState.Playing)
+                while (isRunning)
                 {
-                    UpdateCentralSnowball(deltaTime);
-                }
+                    UpdateSnowballs(deltaTime);
 
-                await Task.Delay(delayMs);
+                    if (gameState == GameState.Playing)
+                    {
+                        UpdateCentralSnowball(deltaTime);
+                    }
+
+                    await Task.Delay(delayMs);
+                }
+            }
+            catch(Exception ex)
+            {
+                Console.WriteLine(
+                    $"[StartGameLoop Error]\n{ex}");
             }
         }
 
@@ -322,10 +335,10 @@ namespace SnowballServer
                 };
             }
 
-            bridgePosition[0] = new Vector3(10, 3, 10);
-            bridgePosition[1] = new Vector3(88, 3, 90);
-            bridgePosition[2] = new Vector3(8, 3, 173);
-            bridgePosition[3] = new Vector3(-52, 3, 90);
+            bridgePosition[0] = new Vector3(10, 3, 23);
+            bridgePosition[1] = new Vector3(75, 3, 90);
+            bridgePosition[2] = new Vector3(8, 3, 160);
+            bridgePosition[3] = new Vector3(-39, 3, 90);
         }
 
         void InitializeStorages()
@@ -413,6 +426,7 @@ namespace SnowballServer
 
                     if (gameState != GameState.Waiting)
                     {
+                        SendGameUnavailable(tcpClient);
                         tcpClient.Close();
                         continue;
                     }
@@ -424,22 +438,26 @@ namespace SnowballServer
                     tokens[token] = clientId;
 
                     int baseKey = -1;
-                    foreach(var bridge in bridges)
+
+                    lock (baseKeyLock)
                     {
-                        if(bridge.Value.OwnerClientId == -1)
+                        foreach (var bridge in bridges)
                         {
-                            baseKey = bridge.Key;
-                            break;
+                            if (bridge.Value.OwnerClientId == -1)
+                            {
+                                baseKey = bridge.Key;
+                                bridge.Value.OwnerClientId = clientId;
+                                playerBaseKeys[clientId] = baseKey;
+                                tcpSendLocks[tcpClient] = new object();
+                                break;
+                            }
                         }
                     }
-
                     if (baseKey == -1)
                     {
                         tcpClient.Close();
                         continue;
                     }
-
-                    playerBaseKeys[clientId] = baseKey;
 
                     Console.WriteLine($"클라이언트 {clientId} 연결");
 
@@ -537,35 +555,104 @@ namespace SnowballServer
 
         void DisconnectClient(int clientId)
         {
-            if (tcpClients.TryRemove(clientId, out TcpClient tcpClient))
+            TcpClient tcpClientToClose = null;
+
+            bool shouldBroadcastLeave = false;
+            bool shouldFinishMatch = false;
+            bool hasWinner = false;
+
+            int winnerClientId = -1;
+            int winnerBaseKey = -1;
+
+            lock (playerStateLock)
             {
-                tcpClient.Close();
+                if (tcpClients.TryRemove(clientId, out TcpClient tcpClient))
+                {
+                    tcpSendLocks.TryRemove(tcpClient, out _);
+                    tcpClientToClose = tcpClient;
+                    shouldBroadcastLeave = true;
+                }
+
+                udpClients.TryRemove(clientId, out _);
+                clientColor.TryRemove(clientId, out _);
+                clientName.TryRemove(clientId, out _);
+                clientPositions.TryRemove(clientId, out _);
+                clientYaws.TryRemove(clientId, out _);
+                lastPositionSequence.TryRemove(clientId, out _);
+
+                playerHps.TryRemove(clientId, out _);
+                playerDead.TryRemove(clientId, out _);
+                snowballCounts.TryRemove(clientId, out _);
+                gunLevels.TryRemove(clientId, out _);
+
+                if (playerBaseKeys.TryGetValue(clientId, out int baseKey))
+                {
+                    shouldBroadcastLeave = true;
+
+                    if (snowFields.TryGetValue(
+                        baseKey,
+                        out SnowFieldState snowField))
+                    {
+                        snowField.OwnerClientId = -1;
+                    }
+
+                    if (bridges.TryGetValue(
+                        baseKey,
+                        out BridgeState bridge))
+                    {
+                        bridge.OwnerClientId = -1;
+                        bridge.IsPurchased = false;
+                    }
+
+                    if (storages.TryGetValue(
+                        baseKey,
+                        out StorageState storage))
+                    {
+                        storage.OwnerClientId = -1;
+                        storage.SnowballCount = 0;
+                    }
+
+                    playerEliminated[baseKey] = true;
+                }
+
+                if (gameState == GameState.Playing)
+                {
+                    int aliveCount = 0;
+
+                    foreach (var player in playerBaseKeys)
+                    {
+                        int currentClientId = player.Key;
+                        int currentBaseKey = player.Value;
+
+                        if (playerEliminated.TryGetValue(
+                            currentBaseKey,
+                            out bool eliminated) &&
+                            !eliminated)
+                        {
+                            aliveCount++;
+
+                            winnerClientId = currentClientId;
+                            winnerBaseKey = currentBaseKey;
+                        }
+                    }
+
+                    if (aliveCount == 1)
+                    {
+                        gameState = GameState.Finished;
+
+                        hasWinner = true;
+                        shouldFinishMatch = true;
+                    }
+                    else if (aliveCount == 0)
+                    {
+                        gameState = GameState.Finished;
+
+                        shouldFinishMatch = true;
+                    }
+                }
             }
 
-            udpClients.TryRemove(clientId, out _);
-            clientColor.TryRemove(clientId, out _);
-            clientName.TryRemove(clientId, out _);
-            clientPositions.TryRemove(clientId, out _);
-            clientYaws.TryRemove(clientId, out _);
-            lastPositionSequence.TryRemove(clientId, out _);
-            playerHps.TryRemove(clientId, out _);
-            playerDead.TryRemove(clientId, out _);
-            snowballCounts.TryRemove(clientId, out _);
-            gunLevels.TryRemove(clientId, out _);
-
-
-            if (playerBaseKeys.TryGetValue(clientId, out int baseKey))
-            {
-                snowFields[baseKey].OwnerClientId = -1;
-                bridges[baseKey].OwnerClientId = -1;
-                bridges[baseKey].IsPurchased = false;
-                storages[baseKey].OwnerClientId = -1;
-                storages[baseKey].SnowballCount = 0;
-
-                playerEliminated[baseKey] = true;
-
-                playerBaseKeys.TryRemove(clientId, out _);
-            }
+            tcpClientToClose?.Close();
 
             string tokenToRemove = null;
 
@@ -579,15 +666,25 @@ namespace SnowballServer
             }
 
             if (tokenToRemove != null)
-            {
                 tokens.TryRemove(tokenToRemove, out _);
-            }
 
-            BroadcastPlayerLeave(clientId);
+            if (shouldBroadcastLeave)
+                BroadcastPlayerLeave(clientId);
 
             Console.WriteLine($"클라이언트 {clientId} 정리 완료");
-        }
 
+            if (hasWinner)
+            {
+                BroadcastWinnerPlayer(
+                    winnerClientId,
+                    winnerBaseKey);
+            }
+
+            if (shouldFinishMatch)
+            {
+                _ = FinishMatch();
+            }
+        }
         void BroadcastPlayerLeave(int clientId)
         {
             byte[] data = Encoding.UTF8.GetBytes(clientId.ToString());
@@ -604,8 +701,24 @@ namespace SnowballServer
                 if (!client.Value.Connected)
                     continue;
 
-                NetworkStream stream = client.Value.GetStream();
-                stream.Write(packet, 0, packet.Length);
+                if (!tcpSendLocks.TryGetValue(
+                    client.Value,
+                    out object sendLock))
+                    continue;
+
+                lock (sendLock)
+                {
+                    try
+                    {
+                        NetworkStream stream = client.Value.GetStream();
+                        stream.Write(packet, 0, packet.Length);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine(
+                            $"[TCP Send Error]\n{ex}");
+                    }
+                }
             }
         }
 
@@ -707,7 +820,27 @@ namespace SnowballServer
             }
         }
 
+        void SendGameUnavailable(TcpClient client)
+        {
+            byte[] packet = new byte[2];
 
+            packet[0] = (byte)TcpPacketType.GameFinished;
+            packet[1] = 0;
+
+            if (!client.Connected) return;
+
+
+            try
+            {
+                NetworkStream stream = client.GetStream();
+                stream.Write(packet, 0, packet.Length);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(
+                    $"[TCP Send Error]\n{ex}");
+            }
+        }
         void SendClientInfo(TcpClient client, int clientId, string token, int baseKey)
         {
             string payload = $"{clientId}:{token}:{baseKey}";
@@ -720,8 +853,27 @@ namespace SnowballServer
 
             Array.Copy(data, 0, packet, 2, data.Length);
 
-            NetworkStream stream = client.GetStream();
-            stream.Write(packet, 0, packet.Length);
+            if (!client.Connected)
+                return;
+
+            if (!tcpSendLocks.TryGetValue(
+                client,
+                out object sendLock))
+                return;
+
+            lock (sendLock)
+            {
+                try
+                {
+                    NetworkStream stream = client.GetStream();
+                    stream.Write(packet, 0, packet.Length);
+                }
+                catch(Exception ex)
+                {
+                    Console.WriteLine(
+                        $"[TCP Send Error] Client:{clientId}\n{ex}");
+                }
+            }
         }
         void HandlePlayerJoin(byte[] buffer, int clientId, TcpClient tcpClient)
         {
@@ -761,15 +913,12 @@ namespace SnowballServer
             {
                 snowFields[baseKey].OwnerClientId = clientId;
 
-                int posX = random.Next(snowFields[baseKey].MinX, snowFields[baseKey].MaxX);
-                int posZ = random.Next(snowFields[baseKey].MinZ, snowFields[baseKey].MaxZ);
+                int posX = Random.Shared.Next(snowFields[baseKey].MinX, snowFields[baseKey].MaxX);
+                int posZ = Random.Shared.Next(snowFields[baseKey].MinZ, snowFields[baseKey].MaxZ);
 
                 snowFields[baseKey].CurrentSnowPosition = new Vector3(posX, 3, posZ);
 
                 BroadcastSnowFieldInfo(clientId, baseKey, snowFields[baseKey].CurrentSnowPosition);
-
-                storages[baseKey].OwnerClientId = -1;
-                storages[baseKey].SnowballCount = 0;
 
                 storages[baseKey].OwnerClientId = clientId;
 
@@ -822,16 +971,18 @@ namespace SnowballServer
 
                 SendGunInfoToClient(
                     tcpClient,
-                    gunLevel.Key
+                    gunLevel.Key,
+                    gunLevel.Value,
+                    snowballCounts[gunLevel.Key]
                 );
             }
         }
-        void SendGunInfoToClient(TcpClient tcpClient, int onwerId)
+        void SendGunInfoToClient(TcpClient tcpClient, int onwerId, int gunLevel, int snowballCount)
         {
             byte[] data = Encoding.UTF8.GetBytes(
                 $"{onwerId}" +
-                $"{gunLevels[onwerId]}" +
-                $"{snowballCounts[onwerId]}");
+                $"{gunLevel}" +
+                $"{snowballCount}");
 
             byte[] packet = new byte[data.Length + 2];
 
@@ -840,10 +991,26 @@ namespace SnowballServer
 
             Array.Copy(data, 0, packet, 2, data.Length);
 
-            if (tcpClient.Connected)
+            if (!tcpSendLocks.TryGetValue(
+                tcpClient,
+                out object sendLock))
+                return;
+
+            lock (sendLock)
             {
-                NetworkStream stream = tcpClient.GetStream();
-                stream.Write(packet, 0, packet.Length);
+                try
+                {
+                    if (tcpClient.Connected)
+                    {
+                        NetworkStream stream = tcpClient.GetStream();
+                        stream.Write(packet, 0, packet.Length);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine(
+                        $"[TCP Send Error]\n{ex}");
+                }
             }
         }
         void SendBridgeToClient(TcpClient tcpClient, int onwerId, int bridgeKey)
@@ -858,10 +1025,26 @@ namespace SnowballServer
             packet[1] = (byte)data.Length;
             Array.Copy(data, 0, packet, 2, data.Length);
 
-            if (tcpClient.Connected)
+            if (!tcpSendLocks.TryGetValue(
+                tcpClient,
+                out object sendLock))
+                return;
+
+            lock (sendLock)
             {
-                NetworkStream stream = tcpClient.GetStream();
-                stream.Write(packet, 0, packet.Length);
+                try
+                {
+                    if (tcpClient.Connected)
+                    {
+                        NetworkStream stream = tcpClient.GetStream();
+                        stream.Write(packet, 0, packet.Length);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine(
+                        $"[TCP Send Error]\n{ex}");
+                }
             }
         }
         void SendSnowFieldToClient(TcpClient tcpClient, int onwerId, int fieldKey, Vector3 pos)
@@ -879,10 +1062,26 @@ namespace SnowballServer
             packet[1] = (byte)data.Length;
             Array.Copy(data, 0, packet, 2, data.Length);
 
-            if (tcpClient.Connected)
+            if (!tcpSendLocks.TryGetValue(
+                tcpClient,
+                out object sendLock))
+                return;
+
+            lock (sendLock)
             {
-                NetworkStream stream = tcpClient.GetStream();
-                stream.Write(packet, 0, packet.Length);
+                try
+                {
+                    if (tcpClient.Connected)
+                    {
+                        NetworkStream stream = tcpClient.GetStream();
+                        stream.Write(packet, 0, packet.Length);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine(
+                        $"[TCP Send Error]\n{ex}");
+                }
             }
         }
 
@@ -900,10 +1099,26 @@ namespace SnowballServer
 
             foreach (var client in tcpClients)//새로운 클라이언트를 이미 접속한 모든 클라이언트에 전송
             {
-                if (client.Value.Connected)
+                if (!tcpSendLocks.TryGetValue(
+                    client.Value,
+                    out object sendLock))
+                    continue;
+
+                lock (sendLock)
                 {
-                    NetworkStream stream = client.Value.GetStream();
-                    stream.Write(packet, 0, packet.Length);
+                    try
+                    {
+                        if (client.Value.Connected)
+                        {
+                            NetworkStream stream = client.Value.GetStream();
+                            stream.Write(packet, 0, packet.Length);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine(
+                            $"[TCP Send Error]\n{ex}");
+                    }
                 }
             }
         }
@@ -924,10 +1139,26 @@ namespace SnowballServer
 
             foreach (var client in tcpClients)//새로운 클라이언트를 이미 접속한 모든 클라이언트에 전송
             {
-                if (client.Value.Connected)
+                if (!tcpSendLocks.TryGetValue(
+                    client.Value,
+                    out object sendLock))
+                    continue;
+
+                lock (sendLock)
                 {
-                    NetworkStream stream = client.Value.GetStream();
-                    stream.Write(packet, 0, packet.Length);
+                    try
+                    {
+                        if (client.Value.Connected)
+                        {
+                            NetworkStream stream = client.Value.GetStream();
+                            stream.Write(packet, 0, packet.Length);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine(
+                            $"[TCP Send Error]\n{ex}");
+                    }
                 }
             }
         }
@@ -958,11 +1189,27 @@ namespace SnowballServer
                 if (client.Key == senderId)
                     continue;
 
-                if (!client.Value.Connected)
+                if (!tcpSendLocks.TryGetValue(
+                    client.Value,
+                    out object sendLock))
                     continue;
 
-                NetworkStream stream = client.Value.GetStream();
-                stream.Write(packet, 0, packet.Length);
+                lock (sendLock)
+                {
+                    try
+                    {
+                        if (client.Value.Connected)
+                        {
+                            NetworkStream stream = client.Value.GetStream();
+                            stream.Write(packet, 0, packet.Length);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine(
+                            $"[TCP Send Error]\n{ex}");
+                    }
+                }
             }
         }
 
@@ -978,12 +1225,28 @@ namespace SnowballServer
 
             foreach (var client in tcpClients)//새로운 클라이언트를 이미 접속한 모든 클라이언트에 전송
             {
-                if (client.Value.Connected)
+                if (client.Key == senderID)
+                    continue;
+
+                if (!tcpSendLocks.TryGetValue(
+                    client.Value,
+                    out object sendLock))
+                    continue;
+
+                lock (sendLock)
                 {
-                    if (client.Key != senderID)
+                    try
                     {
-                        NetworkStream stream = client.Value.GetStream();
-                        stream.Write(packet, 0, packet.Length);
+                        if (client.Value.Connected)
+                        {
+                            NetworkStream stream = client.Value.GetStream();
+                            stream.Write(packet, 0, packet.Length);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine(
+                            $"[TCP Send Error]\n{ex}");
                     }
                 }
             }
@@ -1000,9 +1263,25 @@ namespace SnowballServer
                         packet[1] = (byte)data.Length;
                         Array.Copy(data, 0, packet, 2, data.Length);
 
-                        NetworkStream stream = tcpClients[senderID].GetStream();
-                        stream.Write(packet, 0, packet.Length);
-                        Console.WriteLine("서버 : 색, 이름 보냄");
+                        if (!tcpSendLocks.TryGetValue(
+                            client.Value,
+                            out object sendLock))
+                            continue;
+
+                        lock (sendLock)
+                        {
+                            try
+                            {
+                                NetworkStream stream = tcpClients[senderID].GetStream();
+                                stream.Write(packet, 0, packet.Length);
+                                Console.WriteLine("서버 : 색, 이름 보냄");
+                            }
+                            catch (Exception ex)
+                            {
+                                Console.WriteLine(
+                                    $"[TCP Send Error]\n{ex}");
+                            }
+                        }
                     }
                 }
             }
@@ -1051,6 +1330,12 @@ namespace SnowballServer
             float z = float.Parse(position[2]);
 
             clientPositions[clientId] = new Vector3(x, y, z);
+
+            if(y < -5f)
+            {
+                SendCoreDeadResult(clientId);
+                return;
+            }
 
             float yaw = float.Parse(parts[3]);
 
@@ -1131,8 +1416,6 @@ namespace SnowballServer
 
         void StartGame()
         {
-            gameState = GameState.Playing;
-
             Console.WriteLine("Game Start");
 
             centralSnowballCount = 0;
@@ -1140,7 +1423,6 @@ namespace SnowballServer
 
             foreach (var client in tcpClients)
             {
-
                 if (!client.Value.Connected)
                 {
                     continue;
@@ -1188,19 +1470,14 @@ namespace SnowballServer
                     $"playerDead: {playerDead[client.Key]}");
 
             }
+
+            gameState = GameState.Playing;
+
             BroadcastGameStart();
         }
 
         void HandleCoreHitRequest(byte[] buffer, int clientId)
         {
-            if (playerDead.TryGetValue(clientId, out bool isDead) && isDead)
-            {
-                return;
-            }
-
-            if (gameState != GameState.Playing)
-                return;
-
             if (!clientPositions.TryGetValue(
                 clientId,
                 out Vector3 playerPosition))
@@ -1225,84 +1502,136 @@ namespace SnowballServer
 
             if (ownerId == clientId) return;
 
-            if (!cores.TryGetValue(
-                targetBaseKey,
-                out CoreState targetCore))
+
+            int coreHp;
+            int aliveCount = 0;
+            int winnerClientId = -1;
+            int winnerBaseKey = -1;
+            bool coreDestroyed = false;
+            bool matchFinished = false;
+
+            lock (playerStateLock)
             {
-                return;
-            }
+                if (playerDead.TryGetValue(clientId, out bool isDead) && isDead)
+                {
+                    return;
+                }
 
-            if (targetCore.OwnerClientId != ownerId)
-            {
-                return;
-            }
-
-
-            float dx = cores[targetBaseKey].Position.X - playerPosition.X;
-
-            float dz = cores[targetBaseKey].Position.Z - playerPosition.Z;
-
-            float distance = MathF.Sqrt(dx * dx + dz * dz);
-
-            if (distance > 4f)
-            {
-                return;
-
-            }
-
-            if (playerBaseKeys.TryGetValue(clientId, out int baseKey))
-            {
-                if (baseKey == targetBaseKey) return;
-
-                if (playerEliminated[targetBaseKey])
+                if (gameState != GameState.Playing)
                     return;
 
-                cores[targetBaseKey].Hp -= 1;
-
-                if (cores[targetBaseKey].Hp <= 0)
+                if (!cores.TryGetValue(
+                targetBaseKey,
+                out CoreState targetCore))
                 {
+                    return;
+                }
+
+                if (targetCore.OwnerClientId != ownerId)
+                {
+                    return;
+                }
+
+                float dx = cores[targetBaseKey].Position.X - playerPosition.X;
+                float dz = cores[targetBaseKey].Position.Z - playerPosition.Z;
+
+                float distance = MathF.Sqrt(dx * dx + dz * dz);
+
+                if (distance > 4f)
+                {
+                    return;
+                }
+
+                if (!playerBaseKeys.TryGetValue(clientId, out int baseKey))
+                {
+                    return;
+                }
+
+                if (baseKey == targetBaseKey) return;
+
+                if (!playerEliminated.TryGetValue(targetBaseKey, out bool isEliminated))
+                {
+                    return;
+                }
+                if (isEliminated)
+                    return;
+
+                coreHp = targetCore.Hp - 1;
+                targetCore.Hp = coreHp;
+
+                if (coreHp <= 0)
+                {
+                    coreDestroyed = true;
+
                     //탈락
                     playerEliminated[targetBaseKey] = true;
 
-                    int eliminatedNum = 0;
-                    foreach(var eliminated in playerEliminated)
+                    foreach (var player in playerEliminated)
                     {
-                        if (!eliminated.Value)
+                        if (player.Value)
+                            continue;
+
+                        aliveCount++;
+                        winnerBaseKey = player.Key;
+                    }
+
+                    if (aliveCount == 1)
+                    {
+                        foreach (var player in playerBaseKeys)
                         {
-                            eliminatedNum++;
+                            if (player.Value == winnerBaseKey)
+                            {
+                                winnerClientId = player.Key;
+                                break;
+                            }
                         }
-                    }
 
-                    if(eliminatedNum == 1)
-                    {
                         gameState = GameState.Finished;
-
-                        BroadcastWinnerPlayer(clientId, baseKey);
-
-                        _ = FinishMatch();
+                        matchFinished = true;
                     }
-                    else
-                    {
-                        SendCoreDeadResult(clientId);
-                    }
+                }
+            }
 
-                    BroadcastCoreOutPlayer(ownerId, targetBaseKey);//플레이어 탈락
+            if (coreDestroyed)
+            {
+                BroadcastCoreOutPlayer(ownerId, targetBaseKey);//플레이어 탈락
+
+                if (matchFinished)
+                {
+                    BroadcastWinnerPlayer(winnerClientId, winnerBaseKey);
+
+                    _ = FinishMatch();
                 }
                 else
                 {
-                    BroadcastCoreHitResult(ownerId, targetBaseKey, cores[targetBaseKey].Hp, clientId);//core 줄이기
+                    BroadcastCoreHitResult(ownerId, targetBaseKey, coreHp, clientId);//core 줄이기
                     SendCoreDeadResult(clientId);
                 }
+                
+            }
+            else
+            {
+                BroadcastCoreHitResult(ownerId, targetBaseKey, coreHp, clientId);//core 줄이기
+                SendCoreDeadResult(clientId);
             }
         }
+
         async Task FinishMatch()
         {
-            gameState = GameState.Finished;
+            try
+            {
+                gameState = GameState.Finished;
 
-            await Task.Delay(5000);
+                await Task.Delay(5000);
 
-            ClearPlayers();
-            ResetMatch();
+                ClearPlayers();
+                ResetMatch();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(
+                    $"[FinishMatch Error]\n{ex}");
+            }
         }
         void ResetMatch()
         {
@@ -1372,36 +1701,53 @@ namespace SnowballServer
         }
         void SendCoreDeadResult(int targetId)
         {
-            playerDead[targetId] = true;
+            int dropCount = 0;
+            int dropId = -1;
+            Vector3 dropPosition = Vector3.Zero;
 
-            gunLevels[targetId] = 0;
-            BroadcastGunRemove(targetId);
-
-            if (snowballCounts.TryGetValue(targetId, out int snowballCount))
+            lock (playerStateLock)
             {
-                int dropCount = snowballCount / 2;
-
-                if (dropCount > 0)
+                if (playerDead.TryGetValue(targetId, out bool isDead) &&
+                    isDead)
                 {
-                    int dropId = ++nextDropSnowballId;
-
-                    DroppedSnowballState drop = new DroppedSnowballState
-                    {
-                        Id = dropId,
-                        Position = clientPositions[targetId],
-                        Count = dropCount
-                    };
-
-                    droppedSnowballs[dropId] = drop;
-
-                    BroadcastDroppedSnowballs(
-                        drop.Id,
-                        drop.Position,
-                        drop.Count
-                    );
+                    return;
                 }
 
-                snowballCounts[targetId] = 0;
+                playerDead[targetId] = true;
+
+                gunLevels[targetId] = 0;
+
+                if (snowballCounts.TryGetValue(targetId, out int snowballCount))
+                {
+                    dropCount = snowballCount / 2;
+                    snowballCounts[targetId] = 0;
+
+                    if (dropCount > 0 && 
+                        clientPositions.TryGetValue(
+                        targetId,
+                        out dropPosition))
+                    {
+                        dropId = ++nextDropSnowballId;
+
+                        droppedSnowballs[dropId] = new DroppedSnowballState
+                        {
+                            Id = dropId,
+                            Position = clientPositions[targetId],
+                            Count = dropCount
+                        };
+                    }
+                }
+            }
+
+            BroadcastGunRemove(targetId);
+
+            if(dropId != -1)
+            {
+                BroadcastDroppedSnowballs(
+                    dropId,
+                    dropPosition,
+                    dropCount
+                );
             }
 
             _ = RespawnPlayer(targetId);
@@ -1423,37 +1769,52 @@ namespace SnowballServer
                 return;
             }
 
-            float dx = bridgePosition[playerBaseKeys[clientId]].X - playerPosition.X;
+            int messageLength = buffer[1];
 
-            float dz = bridgePosition[playerBaseKeys[clientId]].Z - playerPosition.Z;
+            string data = Encoding.UTF8.GetString(buffer, 2, messageLength);
+
+            if (!int.TryParse(data, out int targetKey))
+            {
+                return;
+            }
+
+            if (!bridgePosition.TryGetValue(targetKey, out Vector3 targetBridgePosition))
+                return;
+
+            float dx = targetBridgePosition.X - playerPosition.X;
+
+            float dz = targetBridgePosition.Z - playerPosition.Z;
 
             float distance = MathF.Sqrt(dx * dx + dz * dz);
 
-            if (distance > 2f)
+            if (distance > 15f)
             {
                 return;
-
             }
 
-
-            if (!snowballCounts.TryGetValue(
-                clientId,
-                out int snowballCount))
-                return;
-
-
-            if (snowballCount < BridgePrice)
-                return;
-
-            if (playerBaseKeys.TryGetValue(clientId, out int baseKey))
+            int snowballCount = 0;
+            lock (playerStateLock)
             {
-                if (bridges[baseKey].IsPurchased) return;
+                if (!snowballCounts.TryGetValue(
+                    clientId,
+                    out snowballCount))
+                    return;
 
-                bridges[baseKey].IsPurchased = true;
-                snowballCounts[clientId] -= BridgePrice;
+                if (snowballCount < BridgePrice)
+                    return;
 
-                BroadcastBridgePurchaseResult(clientId);
+                if (!bridges.TryGetValue(targetKey, out BridgeState bridge))
+                    return;
+
+                if (bridge.IsPurchased) return;
+
+                bridge.IsPurchased = true;
+
+                snowballCount -= BridgePrice;
+                snowballCounts[clientId] = snowballCount;
             }
+
+            BroadcastBridgePurchaseResult(targetKey, clientId, snowballCount);
         }
 
         void HandleCentralSnowballRequest(byte[] buffer, int clientId)
@@ -1482,26 +1843,36 @@ namespace SnowballServer
 
             }
 
-
-            if (!snowballCounts.TryGetValue(
-                clientId,
-                out int snowballCount))
-                return;
-
-
-            if (centralSnowballCount <= 0)
-                return;
-
-
             if (gameState != GameState.Playing)
                 return;
 
+            int acquiredCount;
 
-            snowballCounts[clientId] += centralSnowballCount;
-            centralSnowballCount = 0;
-            centralSnowballTimer = 0f;
+            lock (centralSnowballLock)
+            {
+                if (centralSnowballCount <= 0)
+                    return;
 
-            BroadcastCentralSnowballResult(clientId);
+                acquiredCount = centralSnowballCount;
+
+                centralSnowballCount = 0;
+                centralSnowballTimer = 0f;
+            }
+
+            int snowballCount;
+
+            lock (playerStateLock)
+            {
+                if (!snowballCounts.TryGetValue(
+                    clientId,
+                    out snowballCount))
+                    return;
+
+                snowballCount += acquiredCount;
+                snowballCounts[clientId] = snowballCount;
+            }
+
+            BroadcastCentralSnowballResult(clientId, snowballCount);
         }
 
         void HandleStorageRequest(byte[] buffer, int clientId)
@@ -1511,72 +1882,101 @@ namespace SnowballServer
                 return;
             }
 
+            if (!playerBaseKeys.TryGetValue(
+                clientId,
+                out int playerBaseKey))
+            {
+                return;
+            }
+
             if (!clientPositions.TryGetValue(
                 clientId,
                 out Vector3 playerPosition))
                 return;
 
-            float dx = storagePosition[playerBaseKeys[clientId]].X - playerPosition.X;
+            if (!storagePosition.TryGetValue(
+                playerBaseKey,
+                out Vector3 targetStoragePosition))
+            {
+                return;
+            }
 
-            float dz = storagePosition[playerBaseKeys[clientId]].Z - playerPosition.Z;
+            float dx = targetStoragePosition.X - playerPosition.X;
+
+            float dz = targetStoragePosition.Z - playerPosition.Z;
 
             float distance = MathF.Sqrt(dx * dx + dz * dz);
 
             if (distance > 2f)
                 return;
 
-            if (!snowballCounts.TryGetValue(
-                clientId,
-                out int snowballCount))
-                return;
-
-            int messageLength = buffer[1];
-
             StorageAction action = (StorageAction)buffer[2];
 
-            switch (action)
+            int storageCount;
+            int snowballCount;
+
+            lock (playerStateLock)
             {
-                case StorageAction.DepositAll:
-                    if (snowballCounts[clientId] <= 0) return;
+                if (!snowballCounts.TryGetValue(
+                    clientId,
+                    out snowballCount))
+                    return;
 
-                    storages[playerBaseKeys[clientId]].SnowballCount += snowballCounts[clientId];
-                    snowballCounts[clientId] = 0;
+                if (!storages.TryGetValue(
+                    playerBaseKey,
+                    out StorageState storage))
+                {
+                    return;
+                }
 
-                    break;
+                storageCount = storage.SnowballCount;
 
-                case StorageAction.DepositHalf:
-                    if (snowballCounts[clientId] <= 0) return;
+                switch (action)
+                {
+                    case StorageAction.DepositAll:
+                        if (snowballCount <= 0) return;
 
-                    int amountDeposit = snowballCounts[clientId] / 2;
+                        storageCount += snowballCounts[clientId];
+                        snowballCount = 0;
+                        break;
 
-                    storages[playerBaseKeys[clientId]].SnowballCount += amountDeposit;
-                    snowballCounts[clientId] -= amountDeposit;
+                    case StorageAction.DepositHalf:
+                        if (snowballCount <= 0) return;
 
-                    break;
+                        int amountDeposit = snowballCount / 2;
 
-                case StorageAction.WithdrawAll:
-                    if (storages[playerBaseKeys[clientId]].SnowballCount <= 0) return;
+                        storageCount += amountDeposit;
+                        snowballCount -= amountDeposit;
+                        break;
 
-                    snowballCounts[clientId] += storages[playerBaseKeys[clientId]].SnowballCount;
-                    storages[playerBaseKeys[clientId]].SnowballCount = 0;
+                    case StorageAction.WithdrawAll:
+                        if (storageCount <= 0) return;
 
-                    break;
+                        snowballCount += storageCount;
+                        storageCount = 0;
+                        break;
 
-                case StorageAction.WithdrawHalf:
-                    if (storages[playerBaseKeys[clientId]].SnowballCount <= 0) return;
+                    case StorageAction.WithdrawHalf:
+                        if (storageCount <= 0) return;
 
-                    int amountWithdraw = storages[playerBaseKeys[clientId]].SnowballCount / 2;
+                        int amountWithdraw = storageCount / 2;
 
-                    snowballCounts[clientId] += amountWithdraw;
-                    storages[playerBaseKeys[clientId]].SnowballCount -= amountWithdraw;
+                        snowballCount += amountWithdraw;
+                        storageCount -= amountWithdraw;
+                        break;
 
-                    break;
+                    default:
+                        break;
+                }
+
+                storage.SnowballCount = storageCount;
+
+                snowballCounts[clientId] = snowballCount;
             }
+            Console.WriteLine("보관: " + storageCount);
+            Console.WriteLine("소유: " + snowballCount);
 
-            Console.WriteLine("보관: " + storages[playerBaseKeys[clientId]].SnowballCount);
-            Console.WriteLine("소유: " + snowballCounts[clientId]);
-
-            SendStorageActionResult(clientId, playerBaseKeys[clientId], storages[playerBaseKeys[clientId]].SnowballCount, snowballCounts[clientId]);
+            SendStorageActionResult(clientId, playerBaseKey, storageCount, snowballCount);
 
             return;
         }
@@ -1593,38 +1993,49 @@ namespace SnowballServer
                 out Vector3 playerPosition))
                 return;
 
-            float dx = gunShopPosition[playerBaseKeys[clientId]].X - playerPosition.X;
+            if (!playerBaseKeys.TryGetValue(clientId, out int baseKey))
+                return;
 
-            float dz = gunShopPosition[playerBaseKeys[clientId]].Z - playerPosition.Z;
+            if (!gunShopPosition.TryGetValue(baseKey, out Vector3 shopPosition))
+                return;
+
+            float dx = shopPosition.X - playerPosition.X;
+
+            float dz = shopPosition.Z - playerPosition.Z;
 
             float distance = MathF.Sqrt(dx * dx + dz * dz);
 
             if (distance > 2f)
                 return;
 
-            if (!snowballCounts.TryGetValue(
-                clientId,
-                out int snowballCount))
-                return;
+            int snowballCount;
+            int gunLevel;
+            lock (playerStateLock)
+            {
+                if (!snowballCounts.TryGetValue(
+                    clientId,
+                    out snowballCount))
+                    return;
 
-            if (!gunLevels.TryGetValue(clientId, out int gunLevel))
-                return;
+                if (!gunLevels.TryGetValue(clientId, out gunLevel))
+                    return;
 
-            if (gunLevel > 2)
-                return;
+                if (gunLevel > 2)
+                    return;
 
-            if (!gunPrices.TryGetValue(gunLevel, out int gunPrice))
-                return;
+                if (!gunPrices.TryGetValue(gunLevel, out int gunPrice))
+                    return;
 
-            if (snowballCount < gunPrice)
-                return;
+                if (snowballCount < gunPrice)
+                    return;
 
+                snowballCount -= gunPrice;
+                gunLevel++;
+                snowballCounts[clientId] = snowballCount;
+                gunLevels[clientId] = gunLevel;
+            }
 
-
-            snowballCounts[clientId] -= gunPrice;
-            gunLevels[clientId] = gunLevel + 1;
-
-            BroadcastGunPurchaseResult(clientId);
+            BroadcastGunPurchaseResult(clientId, snowballCount, gunLevel);
         }
 
         void SendStorageActionResult(int clientId, int storageKey, int storageSnowballCount, int playerSnowballCount)
@@ -1649,8 +2060,24 @@ namespace SnowballServer
                 if (client.Key != clientId)
                     continue;
 
-                NetworkStream stream = client.Value.GetStream();
-                stream.Write(packet, 0, packet.Length);
+                if (!tcpSendLocks.TryGetValue(
+                    client.Value,
+                    out object sendLock))
+                    continue;
+
+                lock (sendLock)
+                {
+                    try
+                    {
+                        NetworkStream stream = client.Value.GetStream();
+                        stream.Write(packet, 0, packet.Length);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine(
+                            $"[TCP Send Error]\n{ex}");
+                    }
+                }
             }
         }
 
@@ -1687,9 +2114,6 @@ namespace SnowballServer
             if (distance > 2.5f)
                 return;
 
-            if (!droppedSnowballs.TryRemove(itemId, out item))
-                return;
-
             int newCount = snowballCounts.AddOrUpdate(
                 clientId,
                 item.Count,
@@ -1717,8 +2141,24 @@ namespace SnowballServer
                 if (!client.Value.Connected)
                     continue;
 
-                NetworkStream stream = client.Value.GetStream();
-                stream.Write(packet, 0, packet.Length);
+                if (!tcpSendLocks.TryGetValue(
+                    client.Value,
+                    out object sendLock))
+                    continue;
+
+                lock (sendLock)
+                {
+                    try
+                    {
+                        NetworkStream stream = client.Value.GetStream();
+                        stream.Write(packet, 0, packet.Length);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine(
+                            $"[TCP Send Error]\n{ex}");
+                    }
+                }
             }
         }
 
@@ -1742,8 +2182,24 @@ namespace SnowballServer
                 if (!client.Value.Connected)
                     continue;
 
-                NetworkStream stream = client.Value.GetStream();
-                stream.Write(packet, 0, packet.Length);
+                if (!tcpSendLocks.TryGetValue(
+                    client.Value,
+                    out object sendLock))
+                    continue;
+
+                lock (sendLock)
+                {
+                    try
+                    {
+                        NetworkStream stream = client.Value.GetStream();
+                        stream.Write(packet, 0, packet.Length);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine(
+                            $"[TCP Send Error]\n{ex}");
+                    }
+                }
             }
         }
         void BroadcastCoreOutPlayer(int ownerId, int targetBaseKey)
@@ -1764,8 +2220,24 @@ namespace SnowballServer
                 if (!client.Value.Connected)
                     continue;
 
-                NetworkStream stream = client.Value.GetStream();
-                stream.Write(packet, 0, packet.Length);
+                if (!tcpSendLocks.TryGetValue(
+                    client.Value,
+                    out object sendLock))
+                    continue;
+
+                lock (sendLock)
+                {
+                    try
+                    {
+                        NetworkStream stream = client.Value.GetStream();
+                        stream.Write(packet, 0, packet.Length);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine(
+                            $"[TCP Send Error]\n{ex}");
+                    }
+                }
             }
         }
         void BroadcastWinnerPlayer(int ownerId, int targetBaseKey)
@@ -1786,15 +2258,32 @@ namespace SnowballServer
                 if (!client.Value.Connected)
                     continue;
 
-                NetworkStream stream = client.Value.GetStream();
-                stream.Write(packet, 0, packet.Length);
+                if (!tcpSendLocks.TryGetValue(
+                    client.Value,
+                    out object sendLock))
+                    continue;
+
+                lock (sendLock)
+                {
+                    try
+                    {
+                        NetworkStream stream = client.Value.GetStream();
+                        stream.Write(packet, 0, packet.Length);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine(
+                            $"[TCP Send Error]\n{ex}");
+                    }
+                }
             }
         }
-        void BroadcastBridgePurchaseResult(int clientId)
+        void BroadcastBridgePurchaseResult(int targetKey, int clientId, int snowCount)
         {
             byte[] data = Encoding.UTF8.GetBytes(
+                $"{targetKey}:" +
                 $"{clientId}:" +
-                $"{snowballCounts[clientId]}");
+                $"{snowCount}");
 
             byte[] packet = new byte[data.Length + 2];
 
@@ -1808,16 +2297,32 @@ namespace SnowballServer
                 if (!client.Value.Connected)
                     continue;
 
-                NetworkStream stream = client.Value.GetStream();
-                stream.Write(packet, 0, packet.Length);
+                if (!tcpSendLocks.TryGetValue(
+                    client.Value,
+                    out object sendLock))
+                    continue;
+
+                lock (sendLock)
+                {
+                    try
+                    {
+                        NetworkStream stream = client.Value.GetStream();
+                        stream.Write(packet, 0, packet.Length);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine(
+                            $"[TCP Send Error]\n{ex}");
+                    }
+                }
             }
         }
 
-        void BroadcastCentralSnowballResult(int clientId)
+        void BroadcastCentralSnowballResult(int clientId, int snowballCount)
         {
             byte[] data = Encoding.UTF8.GetBytes(
                 $"{clientId}:" +
-                $"{snowballCounts[clientId]}");
+                $"{snowballCount}");
 
             byte[] packet = new byte[data.Length + 2];
 
@@ -1831,17 +2336,33 @@ namespace SnowballServer
                 if (!client.Value.Connected)
                     continue;
 
-                NetworkStream stream = client.Value.GetStream();
-                stream.Write(packet, 0, packet.Length);
+                if (!tcpSendLocks.TryGetValue(
+                    client.Value,
+                    out object sendLock))
+                    continue;
+
+                lock (sendLock)
+                {
+                    try
+                    {
+                        NetworkStream stream = client.Value.GetStream();
+                        stream.Write(packet, 0, packet.Length);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine(
+                            $"[TCP Send Error]\n{ex}");
+                    }
+                }
             }
         }
 
-        void BroadcastGunPurchaseResult(int clientId)
+        void BroadcastGunPurchaseResult(int clientId, int snowballCount, int gunLevel)
         {
             byte[] data = Encoding.UTF8.GetBytes(
                 $"{clientId}:" +
-                $"{gunLevels[clientId]}:" +
-                $"{snowballCounts[clientId]}");
+                $"{gunLevel}:" +
+                $"{snowballCount}");
 
             byte[] packet = new byte[data.Length + 2];
 
@@ -1855,8 +2376,24 @@ namespace SnowballServer
                 if (!client.Value.Connected)
                     continue;
 
-                NetworkStream stream = client.Value.GetStream();
-                stream.Write(packet, 0, packet.Length);
+                if (!tcpSendLocks.TryGetValue(
+                    client.Value,
+                    out object sendLock))
+                    continue;
+
+                lock (sendLock)
+                {
+                    try
+                    {
+                        NetworkStream stream = client.Value.GetStream();
+                        stream.Write(packet, 0, packet.Length);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine(
+                            $"[TCP Send Error]\n{ex}");
+                    }
+                }
             }
         }
         void BroadcastDroppedSnowItemResult(int itemId, int clientId, int snowballCount)
@@ -1878,8 +2415,24 @@ namespace SnowballServer
                 if (!client.Value.Connected)
                     continue;
 
-                NetworkStream stream = client.Value.GetStream();
-                stream.Write(packet, 0, packet.Length);
+                if (!tcpSendLocks.TryGetValue(
+                    client.Value,
+                    out object sendLock))
+                    continue;
+
+                lock (sendLock)
+                {
+                    try
+                    {
+                        NetworkStream stream = client.Value.GetStream();
+                        stream.Write(packet, 0, packet.Length);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine(
+                            $"[TCP Send Error]\n{ex}");
+                    }
+                }
             }
         }
 
@@ -1900,45 +2453,46 @@ namespace SnowballServer
             {
                 if (field.Value.OwnerClientId == clientId)
                 {
-                    float dx = field.Value.CurrentSnowPosition.X - playerPosition.X;
+                    int newCount;
+                    Vector3 newPosition;
 
-                    float dz = field.Value.CurrentSnowPosition.Z - playerPosition.Z;
+                    lock (snowFieldLock)
+                    {
+                        float dx = field.Value.CurrentSnowPosition.X - playerPosition.X;
 
-                    float distance = MathF.Sqrt(dx * dx + dz * dz);
+                        float dz = field.Value.CurrentSnowPosition.Z - playerPosition.Z;
 
-                    if (distance > 3.5f)
-                        return;
+                        float distance = MathF.Sqrt(dx * dx + dz * dz);
 
-                    int newCount = snowballCounts.AddOrUpdate(
-                        clientId,
-                        1,
-                        (_, current) => current + 1);
+                        if (distance > 3.5f)
+                            return;
 
-                    int posX = random.Next(field.Value.MinX, field.Value.MaxX);
+                        newCount = snowballCounts.AddOrUpdate(
+                            clientId,
+                            1,
+                            (_, current) => current + 1);
 
-                    int posZ = random.Next(field.Value.MinZ, field.Value.MaxZ);
+                        int posX = Random.Shared.Next(field.Value.MinX, field.Value.MaxX);
 
-                    field.Value.CurrentSnowPosition = new Vector3(posX, 3f, posZ);
+                        int posZ = Random.Shared.Next(field.Value.MinZ, field.Value.MaxZ);
 
+                        newPosition = new Vector3(posX, 3f, posZ);
 
-                    Console.WriteLine(
-                        $"Client {clientId} SnowFieldItem 획득 / Snowball {newCount}"
-                    );
+                        field.Value.CurrentSnowPosition = newPosition;
 
+                        Console.WriteLine(
+                            $"Client {clientId} SnowFieldItem 획득 / Snowball {newCount}"
+                        );
+                    }
                     BroadcastSnowItemResult(
                         clientId,
                         field.Key,
                         newCount,
-                        field.Value.CurrentSnowPosition);
-
+                        newPosition);
 
                     break;
                 }
             }
-
-
-
-
         }
 
         void BroadcastSnowItemResult(
@@ -1969,8 +2523,24 @@ namespace SnowballServer
                 if (!client.Value.Connected)
                     continue;
 
-                NetworkStream stream = client.Value.GetStream();
-                stream.Write(packet, 0, packet.Length);
+                if (!tcpSendLocks.TryGetValue(
+                    client.Value,
+                    out object sendLock))
+                    continue;
+
+                lock (sendLock)
+                {
+                    try
+                    {
+                        NetworkStream stream = client.Value.GetStream();
+                        stream.Write(packet, 0, packet.Length);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine(
+                            $"[TCP Send Error]\n{ex}");
+                    }
+                }
             }
         }
 
@@ -1980,16 +2550,6 @@ namespace SnowballServer
             {
                 return;
             }
-
-            if (!snowballCounts.TryGetValue(
-                clientId,
-                out int snowballCount))
-            {
-                return;
-            }
-
-            if (snowballCount <= 0)
-                return;
 
             if (!clientPositions.TryGetValue(
                 clientId,
@@ -2005,13 +2565,28 @@ namespace SnowballServer
                 return;
             }
 
-            if (!gunLevels.TryGetValue(clientId, out int gunLevel))
-                return;
 
-            if (gunLevel == 0)
-                return;
+            int gunLevel;
+            lock (playerStateLock)
+            {
+                if (!gunLevels.TryGetValue(clientId, out gunLevel))
+                    return;
 
-            snowballCounts[clientId]--;
+                if (gunLevel == 0)
+                    return;
+
+                if (!snowballCounts.TryGetValue(
+                    clientId,
+                    out int snowballCount))
+                {
+                    return;
+                }
+
+                if (snowballCount <= 0)
+                    return;
+
+                snowballCounts[clientId] = snowballCount - 1;
+            }
 
             float rad = yaw * MathF.PI / 180f;
 
@@ -2082,14 +2657,24 @@ namespace SnowballServer
                 if (!client.Value.Connected)
                     continue;
 
-                NetworkStream stream =
-                    client.Value.GetStream();
+                if (!tcpSendLocks.TryGetValue(
+                    client.Value,
+                    out object sendLock))
+                    continue;
 
-                stream.Write(
-                    packet,
-                    0,
-                    packet.Length
-                );
+                lock (sendLock)
+                {
+                    try
+                    {
+                        NetworkStream stream = client.Value.GetStream();
+                        stream.Write(packet, 0, packet.Length);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine(
+                            $"[TCP Send Error]\n{ex}");
+                    }
+                }
             }
         }
 
@@ -2158,52 +2743,76 @@ namespace SnowballServer
             int targetId,
             Vector3 direction)
         {
-            if (!playerHps.TryGetValue(
-                targetId,
-                out int currentHp))
+            int newHp;
+            bool died = false;
+            int dropCount = 0;
+            Vector3 dropPosition = Vector3.Zero;
+            int dropId = -1;
+
+            lock (playerStateLock)
             {
-                return;
-            }
-
-            if (currentHp <= 0)
-                return;
-
-            currentHp--;
-
-            playerHps[targetId] = currentHp;
-
-            if (currentHp == 0)
-            {
-                playerDead[targetId] = true;
-
-                gunLevels[targetId] = 0;
-                BroadcastGunRemove(targetId);
-
-                if (snowballCounts.TryGetValue(targetId, out int snowballCount))
+                if (!playerHps.TryGetValue(
+                    targetId,
+                    out int currentHp))
                 {
-                    int dropCount = snowballCount / 2;
+                    return;
+                }
+                if (currentHp <= 0)
+                    return;
 
-                    if (dropCount > 0)
+
+                if (playerDead.TryGetValue(
+                    targetId,
+                    out bool isDead) &&
+                    isDead)
+                    return;
+
+                newHp = currentHp - 1;
+                playerHps[targetId] = newHp;
+
+
+                if (newHp <= 0)
+                {
+                    died = true;
+
+                    playerDead[targetId] = true;
+                    gunLevels[targetId] = 0;
+
+                    if (snowballCounts.TryGetValue(targetId, out int snowballCount))
                     {
-                        int dropId = ++nextDropSnowballId;
+                        dropCount = snowballCount / 2;
 
-                        DroppedSnowballState drop = new DroppedSnowballState
+                        snowballCounts[targetId] = 0;
+                    }
+
+
+                    if (dropCount > 0 && clientPositions.TryGetValue(targetId, out dropPosition))
+                    {
+                        dropId = Interlocked.Increment(ref nextDropSnowballId);
+
+                        droppedSnowballs[dropId] = new DroppedSnowballState
                         {
                             Id = dropId,
                             Position = clientPositions[targetId],
                             Count = dropCount
                         };
-
-                        droppedSnowballs[dropId] = drop;
-
-                        BroadcastDroppedSnowballs(
-                            drop.Id,
-                            drop.Position,
-                            drop.Count
-                        );
                     }
+                }
+            }
 
-                    snowballCounts[targetId] = 0;
+
+            if (died)
+            {
+                BroadcastGunRemove(targetId);
+
+
+                if (dropId != -1)
+                {
+                    BroadcastDroppedSnowballs(
+                        dropId,
+                        dropPosition,
+                        dropCount
+                    );
                 }
 
                 _ = RespawnPlayer(targetId);
@@ -2218,7 +2827,7 @@ namespace SnowballServer
             BroadcastPlayerHit(
                 targetId,
                 attackerId,
-                currentHp
+                newHp
             );
         }
 
@@ -2252,14 +2861,24 @@ namespace SnowballServer
                 if (client.Key != targetId)
                     continue;
 
-                NetworkStream stream =
-                    client.Value.GetStream();
+                if (!tcpSendLocks.TryGetValue(
+                    client.Value,
+                    out object sendLock))
+                    continue;
 
-                stream.Write(
-                    packet,
-                    0,
-                    packet.Length
-                );
+                lock (sendLock)
+                {
+                    try
+                    {
+                        NetworkStream stream = client.Value.GetStream();
+                        stream.Write(packet, 0, packet.Length);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine(
+                            $"[TCP Send Error]\n{ex}");
+                    }
+                }
             }
         }
         void BroadcastGunRemove(int targetId)
@@ -2285,14 +2904,24 @@ namespace SnowballServer
                 if (!client.Value.Connected)
                     continue;
 
-                NetworkStream stream =
-                    client.Value.GetStream();
+                if (!tcpSendLocks.TryGetValue(
+                    client.Value,
+                    out object sendLock))
+                    continue;
 
-                stream.Write(
-                    packet,
-                    0,
-                    packet.Length
-                );
+                lock (sendLock)
+                {
+                    try
+                    {
+                        NetworkStream stream = client.Value.GetStream();
+                        stream.Write(packet, 0, packet.Length);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine(
+                            $"[TCP Send Error]\n{ex}");
+                    }
+                }
             }
         }
         void BroadcastDroppedSnowballs(int id, Vector3 position, int count)
@@ -2328,36 +2957,54 @@ namespace SnowballServer
                 if (!client.Value.Connected)
                     continue;
 
-                NetworkStream stream =
-                    client.Value.GetStream();
+                if (!tcpSendLocks.TryGetValue(
+                    client.Value,
+                    out object sendLock))
+                    continue;
 
-                stream.Write(
-                    packet,
-                    0,
-                    packet.Length
-                );
+                lock (sendLock)
+                {
+                    try
+                    {
+                        NetworkStream stream = client.Value.GetStream();
+                        stream.Write(packet, 0, packet.Length);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine(
+                            $"[TCP Send Error]\n{ex}");
+                    }
+                }
             }
         }
         async Task RespawnPlayer(int clientId)
         {
-            await Task.Delay(3000);
-
-            if (!playerSpawnPositions.TryGetValue(
-                playerBaseKeys[clientId],
-                out Vector3 spawnPosition))
+            try
             {
-                return;
+                await Task.Delay(3000);
+
+                if (!playerSpawnPositions.TryGetValue(
+                    playerBaseKeys[clientId],
+                    out Vector3 spawnPosition))
+                {
+                    return;
+                }
+
+                playerHps[clientId] = 5;
+                playerDead[clientId] = false;
+                clientPositions[clientId] = spawnPosition;
+
+                BroadcastPlayerRespawn(
+                    clientId,
+                    spawnPosition,
+                    5
+                );
             }
-
-            playerHps[clientId] = 5;
-            playerDead[clientId] = false;
-            clientPositions[clientId] = spawnPosition;
-
-            BroadcastPlayerRespawn(
-                clientId,
-                spawnPosition,
-                5
-            );
+            catch (Exception ex)
+            {
+                Console.WriteLine(
+                    $"[RespawnPlayer Error]  clientId:{clientId}\n{ex}");
+            }
         }
 
         void BroadcastPlayerRespawn(int targetId, Vector3 spawnPosition, int currentHp)
@@ -2394,14 +3041,24 @@ namespace SnowballServer
                 if (!client.Value.Connected)
                     continue;
 
-                NetworkStream stream =
-                    client.Value.GetStream();
+                if (!tcpSendLocks.TryGetValue(
+                    client.Value,
+                    out object sendLock))
+                    continue;
 
-                stream.Write(
-                    packet,
-                    0,
-                    packet.Length
-                );
+                lock (sendLock)
+                {
+                    try
+                    {
+                        NetworkStream stream = client.Value.GetStream();
+                        stream.Write(packet, 0, packet.Length);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine(
+                            $"[TCP Send Error]\n{ex}");
+                    }
+                }
             }
         }
 
@@ -2438,14 +3095,24 @@ namespace SnowballServer
                 if (!client.Value.Connected)
                     continue;
 
-                NetworkStream stream =
-                    client.Value.GetStream();
+                if (!tcpSendLocks.TryGetValue(
+                    client.Value,
+                    out object sendLock))
+                    continue;
 
-                stream.Write(
-                    packet,
-                    0,
-                    packet.Length
-                );
+                lock (sendLock)
+                {
+                    try
+                    {
+                        NetworkStream stream = client.Value.GetStream();
+                        stream.Write(packet, 0, packet.Length);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine(
+                            $"[TCP Send Error]\n{ex}");
+                    }
+                }
             }
         }
 
@@ -2482,31 +3149,44 @@ namespace SnowballServer
                 if (!client.Value.Connected)
                     continue;
 
-                NetworkStream stream =
-                    client.Value.GetStream();
+                if (!tcpSendLocks.TryGetValue(
+                    client.Value,
+                    out object sendLock))
+                    continue;
 
-                stream.Write(
-                    packet,
-                    0,
-                    packet.Length
-                );
+                lock (sendLock)
+                {
+                    try
+                    {
+                        NetworkStream stream = client.Value.GetStream();
+                        stream.Write(packet, 0, packet.Length);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine(
+                            $"[TCP Send Error]\n{ex}");
+                    }
+                }
             }
         }
 
         void UpdateCentralSnowball(float deltaTime)
         {
-            centralSnowballTimer += deltaTime;
-
-            if (centralSnowballCount >= CentralSnowballMaxCount)
-                return;
-
-            if(centralSnowballTimer >= CentralSnowballInterval)
+            lock (centralSnowballLock)
             {
-                centralSnowballCount += 1;
-                centralSnowballTimer = 0f;
+                centralSnowballTimer += deltaTime;
 
-                Console.WriteLine($"Timer: {centralSnowballTimer}" +
-                    $"Count: {centralSnowballCount}");
+                if (centralSnowballCount >= CentralSnowballMaxCount)
+                    return;
+
+                if (centralSnowballTimer >= CentralSnowballInterval)
+                {
+                    centralSnowballCount += 1;
+                    centralSnowballTimer = 0f;
+
+                    Console.WriteLine($"Timer: {centralSnowballTimer}" +
+                        $"Count: {centralSnowballCount}");
+                }
             }
         }
 

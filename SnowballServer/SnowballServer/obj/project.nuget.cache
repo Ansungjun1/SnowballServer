@@ -1,8 +1,12 @@
 {
   "version": 2,
-  "dgSpecHash": "g9Z/W4vNy5lzTpYOhrSSBP1w6rwaXPEXf5wgTLHIpFV4uSchhfLAXP6XEU2METWS5qKC+A0O/0eDk+ry6FxtxA==",
+  "dgSpecHash": "bW3I87BSP0D1APIclXa5+urLQvAgM9GajjkYBtLO8PbFNAI4+8fjrV+2Zrt9UNXf7lRcYAGG5azXQrbY7XI5Xg==",
   "success": true,
   "projectFilePath": "D:\\Unity\\SnowballServer\\SnowballServer\\SnowballServer\\SnowballServer.csproj",
-  "expectedPackageFiles": [],
+  "expectedPackageFiles": [
+    "C:\\Users\\User\\.nuget\\packages\\microsoft.netcore.app.runtime.linux-x64\\7.0.0\\microsoft.netcore.app.runtime.linux-x64.7.0.0.nupkg.sha512",
+    "C:\\Users\\User\\.nuget\\packages\\microsoft.aspnetcore.app.runtime.linux-x64\\7.0.0\\microsoft.aspnetcore.app.runtime.linux-x64.7.0.0.nupkg.sha512",
+    "C:\\Users\\User\\.nuget\\packages\\microsoft.netcore.app.host.linux-x64\\7.0.0\\microsoft.netcore.app.host.linux-x64.7.0.0.nupkg.sha512"
+  ],
   "logs": []
 }

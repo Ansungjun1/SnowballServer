@@ -16,8 +16,14 @@ public class PlayerState : MonoBehaviour
     private PlayerMovement movement;
 
     public GameObject gunObject;
+
+    public bool isLocalPlayer = false;
+
+    private NetworkClient networkClient;
+
     private void Awake()
     {
+        networkClient = FindObjectOfType<NetworkClient>();
         movement = GetComponent<PlayerMovement>();
         MaxHp = 5;
         CurrentHp = MaxHp;
@@ -54,44 +60,59 @@ public class PlayerState : MonoBehaviour
 
     private void OnTriggerEnter(Collider other)
     {
+        if (!isLocalPlayer)
+            return;
+
         SnowItem snowItem = other.GetComponent<SnowItem>();
         if (snowItem != null)
         {
-            FindObjectOfType<NetworkClient>().RequestSnowItem(snowItem.ownerId);
+            networkClient.RequestSnowItem(snowItem.ownerId);
         }
 
         DroppedSnowItem droppedSnowItem = other.GetComponent<DroppedSnowItem>();
         if (droppedSnowItem != null)
         {
-            FindObjectOfType<NetworkClient>().RequestDroppedSnowItem(droppedSnowItem.itemId);
+            networkClient.RequestDroppedSnowItem(droppedSnowItem.itemId);
         }
 
         if (other.tag == "Shop")
         {
-            FindObjectOfType<NetworkClient>().RequestGunPurchase();
+            networkClient.RequestGunPurchase();
         }
 
         StorageState storage = other.GetComponent<StorageState>();
 
         if (storage != null)
         {
-            FindObjectOfType<NetworkClient>().RequestStorageJoin(storage.ownerId);
+            networkClient.RequestStorageJoin(storage.ownerId);
         }
 
         if (other.tag == "Central")
         {
-            FindObjectOfType<NetworkClient>().RequestCentralSnowball();
+            networkClient.RequestCentralSnowball();
         }
 
         if (other.tag == "Bridge")
         {
-            FindObjectOfType<NetworkClient>().RequestPurchaseBridge();
+            BridgeState bridge =
+                other.transform.parent
+                    .GetComponentInChildren<BridgeState>(true);
+
+            if (bridge == null)
+                return;
+
+            networkClient.RequestPurchaseBridge(bridge.bridgeKey);
         }
 
         CoreState core = other.GetComponent<CoreState>();
         if (core != null)
         {
-            FindObjectOfType<NetworkClient>().RequestCoreHit(core.ownerId, core.baseKey);
+            networkClient.RequestCoreHit(core.ownerId, core.baseKey);
+        }
+
+        if (other.tag == "Fall")
+        {
+            networkClient.DeadPlayer();
         }
     }
 }

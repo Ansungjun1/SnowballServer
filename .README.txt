@@ -1,0 +1,20 @@
+# Snowfront
+
+2–4 player real-time PvP game built with Unity and a custom C# authoritative server.
+
+## Repository Structure
+
+/Client
+Unity game client
+
+/Server
+Independent C# game server
+
+## Server Features
+
+- TCP: reliable game events
+- UDP: real-time position synchronization
+- Server-authoritative game state
+- Async network I/O
+- Thread-safe shared state
+- AWS EC2 deployment

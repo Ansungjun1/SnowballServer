@@ -63,6 +63,7 @@ enum TcpPacketType : byte
 
     GameStartRequest = 0x18,
     GameStart = 0x19,
+    GameFinished = 0x1A,
 
     CentralSnowball = 0x20,
     CentralSnowballResult = 0x21,
@@ -97,9 +98,11 @@ public class NetworkClient : MonoBehaviour
     public TextMeshProUGUI my_Chat_text;
     public TMP_InputField input_Chat_text;
     public Transform[] SpawnPos;
+    public GameObject[] Bases;
 
     public GameObject WinnerPanel;
     public TextMeshProUGUI WinnerText;
+    public GameObject ExitPanel;
 
     private Dictionary<int, DroppedSnowItem> droppedSnowItems = new Dictionary<int, DroppedSnowItem>();
 
@@ -113,7 +116,8 @@ public class NetworkClient : MonoBehaviour
     private bool sessionReady = false;
 
     //private string ServerIP = "58.231.147.182";
-    private string ServerIP = "192.168.55.207";
+    //private string ServerIP = "192.168.55.207";
+    private string ServerIP = "43.201.32.141";
     private int udpPort = 9051;
     private int tcpPort = 9050;
 
@@ -186,6 +190,21 @@ public class NetworkClient : MonoBehaviour
         if (!isRunning || character == null)
             return;
 
+        if(Input.GetKeyDown(KeyCode.Escape))
+        {
+            ExitPanel.SetActive(!ExitPanel.activeSelf);
+
+            if (ExitPanel.activeSelf)
+            {
+                Cursor.lockState = CursorLockMode.None;
+                Cursor.visible = true;
+            }
+            else
+            {
+                Cursor.lockState = CursorLockMode.Locked;
+                Cursor.visible = false;
+            }
+        }
 
         if (!isChatting && !isEliminated)
         {
@@ -592,6 +611,10 @@ FindObjectsOfType<CoreState>();
             case (byte)TcpPacketType.WinnerPlayer:
                 HandleWinnerPlayer(packet);
                 break;
+
+            case (byte)TcpPacketType.GameFinished:
+                HandleGameFinished(packet);
+                break;
                 
             default:
                 Debug.Log("알 수 없는 패킷 타입:" + packetType);
@@ -620,7 +643,12 @@ FindObjectsOfType<CoreState>();
         foreach (var bridge in bridges)
         {
             bridge.Value.gameObject.SetActive(false);
+
+            if(bridge.Value.ownerId == -1)
+                Bases[bridge.Key].gameObject.SetActive(false);
         }
+
+        Bases[baseKey].gameObject.SetActive(true);
 
         foreach (var player in otherPlayers)
         {
@@ -656,11 +684,12 @@ FindObjectsOfType<CoreState>();
 
         string[] parts = data.Split(':');
 
-        if (parts.Length != 2)
+        if (parts.Length != 3)
             return;
 
-        if (!int.TryParse(parts[0], out int ownerId) ||
-            !int.TryParse(parts[1], out int snowballCount))
+        if (!int.TryParse(parts[0], out int targetKey) ||
+            !int.TryParse(parts[1], out int purchaserId) || 
+            !int.TryParse(parts[2], out int snowballCount))
         {
             return;
         }
@@ -669,15 +698,9 @@ FindObjectsOfType<CoreState>();
 
         UnityMainThreadDispatcher.Enqueue(() =>
         {
-            foreach(var bridge in bridges)
-            {
-                if(bridge.Value.ownerId == ownerId)
-                {
-                    bridge.Value.gameObject.SetActive(true);
-                }
-            }
+            bridges[targetKey].gameObject.SetActive(true);
 
-            if(ownerId == clientId)
+            if(purchaserId == clientId)
             {
                 mySnowballCount = snowballCount;
             }
@@ -939,6 +962,16 @@ FindObjectsOfType<CoreState>();
         });
     }
 
+    void HandleGameFinished(byte[] buffer)
+    {
+        UnityMainThreadDispatcher.Enqueue(() =>
+        {
+            Cursor.lockState = CursorLockMode.None;
+            Cursor.visible = true;
+
+            ExitPanel.SetActive(true);
+        });
+    }
     void HandleWinnerPlayer(byte[] buffer)
     {
         int messageLength = buffer[1];
@@ -1021,24 +1054,31 @@ FindObjectsOfType<CoreState>();
             cores[targetKey].hp = hp;
             cores[targetKey].coreObjects[hp].SetActive(false);
 
-            GameObject targetPlayer;
-
-            if(clientId == deadClientId)
-            {
-                targetPlayer = character;
-            }
-            else
-            {
-                otherPlayers.TryGetValue(deadClientId, out targetPlayer);
-            }
-
-            PlayerState state = targetPlayer.GetComponent<PlayerState>();
-
-            if (state != null)
-            {
-                state.SetHp(0);
-            }
+            DeadPlayer(deadClientId);
         });
+    }
+    public void DeadPlayer(int deadClientId = -1)
+    {
+        if (deadClientId == -1)
+            deadClientId = clientId;
+
+        GameObject targetPlayer;
+
+        if (clientId == deadClientId)
+        {
+            targetPlayer = character;
+        }
+        else
+        {
+            otherPlayers.TryGetValue(deadClientId, out targetPlayer);
+        }
+
+        PlayerState state = targetPlayer.GetComponent<PlayerState>();
+
+        if (state != null)
+        {
+            state.SetHp(0);
+        }
     }
     void HandleCoreOutPlayer(byte[] buffer)
     {
@@ -1084,8 +1124,14 @@ FindObjectsOfType<CoreState>();
 
                 foreach (var player in otherPlayers)
                 {
-                    
-                    Camera.main.GetComponent<CameraManager>().SetSpectateTarget(player.Value.transform);
+                    PlayerState state = player.Value.GetComponent<PlayerState>();
+
+                    if (state == null || state.CurrentHp <= 0f)
+                        continue;
+
+                    Camera.main.GetComponent<CameraManager>()
+                        .SetSpectateTarget(player.Value.transform);
+
                     break;
                 }
             }
@@ -1094,8 +1140,8 @@ FindObjectsOfType<CoreState>();
                 otherPlayers.TryGetValue(targetId, out targetPlayer);
             }
 
+            Bases[targetKey].SetActive(false);
             targetPlayer.SetActive(false);
-
         });
     }
     void HandleBridgeOtherPlayerJoin(byte[] buffer)
@@ -1588,9 +1634,6 @@ FindObjectsOfType<CoreState>();
 
         SetCharacter(baseKey);
 
-
-
-
         byte[] sendData = Encoding.UTF8.GetBytes(
             ChoosePrefab
             + ":"
@@ -1719,8 +1762,10 @@ FindObjectsOfType<CoreState>();
         Debug.Log(fieldKey);
         FindObjectOfType<CameraManager>().SetTarget(character.transform);
         SendPositionToServer(SpawnPos[fieldKey].position);
+        Bases[fieldKey].SetActive(true);
 
         character.GetComponent<PlayerState>().nameText.text = FindObjectOfType<LodingManager>().Name;
+        character.GetComponent<PlayerState>().isLocalPlayer = true;
     }
 
     public void RequestSnowItem(int ownerId)
@@ -1890,14 +1935,19 @@ FindObjectsOfType<CoreState>();
         stream.Write(packet, 0, packet.Length);
     }
 
-    public void RequestPurchaseBridge()
+    public void RequestPurchaseBridge(int baseKey)
     {
         if (gameState != GameState.Playing) return;
 
-        byte[] packet = new byte[2];
+        byte[] data = Encoding.UTF8.GetBytes(
+            $"{baseKey}");
+
+        byte[] packet = new byte[data.Length + 2];
+
+        Array.Copy(data, 0, packet, 2, data.Length);
 
         packet[0] = (byte)TcpPacketType.BridgePurchaseRequest;
-        packet[1] = 0;
+        packet[1] = (byte)data.Length;
 
         stream.Write(packet, 0, packet.Length);
     }
@@ -2035,12 +2085,19 @@ FindObjectsOfType<CoreState>();
             character = null;
         }
 
+        foreach(var baseObject in Bases)
+        {
+            baseObject.SetActive(true);
+        }
+        
+        
         ResetSnowFields();
         ResetStorages();
         ResetBridges();
         ResetCores();
 
         WinnerPanel.SetActive(false);
+        ExitPanel.SetActive(false);
     }
     void ResetSnowFields()
     {

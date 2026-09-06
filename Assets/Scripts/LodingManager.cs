@@ -49,14 +49,15 @@ public class LodingManager : MonoBehaviour
     {
         HomeScene.SetActive(false);
         WaitImage.SetActive(true);
+
+
+        Cursor.lockState = CursorLockMode.Locked;
+        Cursor.visible = false;
     }
 
     public void SetPlay()
     {
         WaitImage.SetActive(false);
-
-        Cursor.lockState = CursorLockMode.Locked;
-        Cursor.visible = false;
     }
     public void ReturnRobby()
     {
